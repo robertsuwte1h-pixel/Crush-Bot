@@ -6,7 +6,7 @@ import uuid
 from io import BytesIO
 from aiohttp import web
 from PIL import Image, ImageDraw, ImageFont
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -145,7 +145,9 @@ def generate_love_image(crush_name: str) -> BytesIO:
     buffer.name = "love.jpg"
     return buffer
 
-WAITING_FOR_NAME = 1
+WAITING_FOR_GENDER = 1
+WAITING_FOR_NAME = 2
+WAITING_FOR_CRUSH_NAME = 3
 
 # ─────────────────────────── HTML generators ────────────────────────────────
 
@@ -378,12 +380,37 @@ async def _send_html(update: Update, crush_name: str, bot_app: Application):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    gender_keyboard = ReplyKeyboardMarkup(
+        [["ছেলে", "মেয়ে"]],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
     await update.message.reply_text(
         "💕 *Do You Love Me? Bot* 💕\n\n"
-        "ক্রাশ বা GF/BF এর নাম লিখুন।\n"
-        "কিউট HTML ফাইল বানিয়ে দেব — সে *Yes* দিলে notification পাবেন! 😄\n\n"
-        "👇 এখন নামটি টাইপ করুন:",
+        "আপনি ছেলে নাকি মেয়ে?",
         parse_mode="Markdown",
+        reply_markup=gender_keyboard,
+    )
+    return WAITING_FOR_GENDER
+
+
+async def receive_gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    gender = update.message.text.strip()
+    if gender not in ("ছেলে", "মেয়ে"):
+        gender_keyboard = ReplyKeyboardMarkup(
+            [["ছেলে", "মেয়ে"]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+        await update.message.reply_text(
+            "❌ দয়া করে নিচের বাটন থেকে সিলেক্ট করুন:",
+            reply_markup=gender_keyboard,
+        )
+        return WAITING_FOR_GENDER
+    context.user_data["gender"] = gender
+    await update.message.reply_text(
+        "আপনার নাম কী?",
+        reply_markup=ReplyKeyboardRemove(),
     )
     return WAITING_FOR_NAME
 
@@ -393,8 +420,38 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not 1 <= len(name) <= 50:
         await update.message.reply_text("❌ নাম ১–৫০ অক্ষরের মধ্যে হতে হবে। আবার চেষ্টা করুন:")
         return WAITING_FOR_NAME
-    await update.message.reply_text(f"⏳ *{name}* এর জন্য HTML তৈরি হচ্ছে...", parse_mode="Markdown")
-    await _send_html(update, name, context.application)
+    context.user_data["user_name"] = name
+    generate_keyboard = ReplyKeyboardMarkup(
+        [["Generate"]],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(
+        f"ধন্যবাদ, *{name}*! 😊\n\n"
+        "এখন আপনার crush/GF/BF এর নাম দিন:",
+        parse_mode="Markdown",
+        reply_markup=generate_keyboard,
+    )
+    return WAITING_FOR_CRUSH_NAME
+
+
+async def receive_crush_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    crush_name = update.message.text.strip()
+    if crush_name == "Generate":
+        await update.message.reply_text(
+            "❌ দয়া করে আপনার crush/GF/BF এর নাম লিখুন:",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return WAITING_FOR_CRUSH_NAME
+    if not 1 <= len(crush_name) <= 50:
+        await update.message.reply_text("❌ নাম ১–৫০ অক্ষরের মধ্যে হতে হবে। আবার চেষ্টা করুন:")
+        return WAITING_FOR_CRUSH_NAME
+    await update.message.reply_text(
+        f"⏳ *{crush_name}* এর জন্য HTML তৈরি হচ্ছে...",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await _send_html(update, crush_name, context.application)
     return ConversationHandler.END
 
 
@@ -605,7 +662,11 @@ async def main():
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
-        states={WAITING_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)]},
+        states={
+            WAITING_FOR_GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_gender)],
+            WAITING_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
+            WAITING_FOR_CRUSH_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_crush_name)],
+        },
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
     bot_app.add_handler(conv)
