@@ -302,6 +302,17 @@ def make_web_app(bot_app: Application) -> web.Application:
     async def health(_: web.Request) -> web.Response:
         return web.Response(text="OK")
 
+    @routes.post("/webhook")
+    async def webhook_handler(request: web.Request) -> web.Response:
+        """Handle incoming Telegram webhook updates."""
+        try:
+            data = await request.json()
+            update = Update.de_json(data, bot_app.bot)
+            await bot_app.process_update(update)
+        except Exception as e:
+            logger.error(f"Webhook processing error: {e}")
+        return web.Response(text="ok")
+
     app = web.Application()
     app.add_routes(routes)
     return app
@@ -333,17 +344,28 @@ async def main():
     await site.start()
     logger.info(f"HTTP server listening on port {PORT}")
 
-    # Start bot
+    # Start bot - use webhook on Railway, polling for local dev
     await bot_app.initialize()
     await bot_app.start()
-    await bot_app.updater.start_polling(drop_pending_updates=True)
-    logger.info("Telegram bot started!")
+
+    if _railway_domain:
+        # Railway deployment: use webhook mode
+        webhook_url = f"https://{_railway_domain}/webhook"
+        await bot_app.bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        logger.info(f"Webhook set: {webhook_url}")
+    else:
+        # Local development: use polling
+        await bot_app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Telegram bot started in polling mode!")
 
     # Run forever
     try:
         await asyncio.Event().wait()
     finally:
-        await bot_app.updater.stop()
+        if not _railway_domain:
+            await bot_app.updater.stop()
+        else:
+            await bot_app.bot.delete_webhook()
         await bot_app.stop()
         await bot_app.shutdown()
         await runner.cleanup()
