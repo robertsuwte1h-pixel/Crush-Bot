@@ -38,22 +38,61 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+logger.info(f"[STARTUP] SERVER_URL = {SERVER_URL}")
+logger.info(f"[STARTUP] RAILWAY_PUBLIC_DOMAIN = '{_railway_domain}'")
 
 # In-memory token store  {token: {chat_id, crush_name}}
 tokens_store: dict = {}
 
+# ── Startup file checks and fault-tolerant loading ──────────────────────────
+_base_dir = os.path.dirname(__file__)
+
 # Load GIF once at startup
-_gif_path = os.path.join(os.path.dirname(__file__), "bear_gif_b64.txt")
-GIF_B64 = open(_gif_path).read().strip()
+_gif_path = os.path.join(_base_dir, "bear_gif_b64.txt")
+if os.path.isfile(_gif_path):
+    GIF_B64 = open(_gif_path).read().strip()
+    logger.info(f"[STARTUP] bear_gif_b64.txt loaded OK ({len(GIF_B64)} chars)")
+else:
+    GIF_B64 = ""
+    logger.warning("[STARTUP] bear_gif_b64.txt NOT FOUND - GIF will be missing")
 
 # Load love image (PNG) as PIL Image template at startup
-_love_img_path = os.path.join(os.path.dirname(__file__), "love_image_b64.txt")
-_love_img_b64 = open(_love_img_path).read().strip()
-LOVE_IMAGE_TEMPLATE = Image.open(BytesIO(base64.b64decode(_love_img_b64)))
+_love_img_path = os.path.join(_base_dir, "love_image_b64.txt")
+LOVE_IMAGE_TEMPLATE = None
+if os.path.isfile(_love_img_path):
+    try:
+        _love_img_b64 = open(_love_img_path).read().strip()
+        LOVE_IMAGE_TEMPLATE = Image.open(BytesIO(base64.b64decode(_love_img_b64)))
+        logger.info("[STARTUP] love_image_b64.txt loaded OK")
+    except Exception as e:
+        logger.error(f"[STARTUP] love_image_b64.txt load FAILED: {e}")
+        LOVE_IMAGE_TEMPLATE = None
+else:
+    logger.warning("[STARTUP] love_image_b64.txt NOT FOUND - love image feature disabled")
 
-# Load Bengali font for text overlay
-_font_path = os.path.join(os.path.dirname(__file__), "NotoSansBengali.ttf")
-BENGALI_FONT = ImageFont.truetype(_font_path, 45)
+# Load Bengali font for text overlay (with fallback to default font)
+_font_path = os.path.join(_base_dir, "NotoSansBengali.ttf")
+BENGALI_FONT = None
+if os.path.isfile(_font_path):
+    try:
+        BENGALI_FONT = ImageFont.truetype(_font_path, 45)
+        logger.info("[STARTUP] NotoSansBengali.ttf loaded OK")
+    except Exception as e:
+        logger.error(f"[STARTUP] NotoSansBengali.ttf load FAILED: {e}")
+        BENGALI_FONT = None
+else:
+    logger.warning("[STARTUP] NotoSansBengali.ttf NOT FOUND")
+
+# Fallback to PIL default font if truetype font unavailable
+if BENGALI_FONT is None:
+    try:
+        BENGALI_FONT = ImageFont.load_default()
+        logger.info("[STARTUP] Using PIL default font as fallback")
+    except Exception as e:
+        logger.error(f"[STARTUP] Even default font failed to load: {e}")
+        BENGALI_FONT = None
+
+logger.info(f"[STARTUP] Image generation available: {LOVE_IMAGE_TEMPLATE is not None and BENGALI_FONT is not None}")
 
 # Text overlay settings
 _TEXT_COLOR = (27, 12, 2)  # Dark color matching original text
@@ -62,6 +101,11 @@ _TEXT_Y_CENTER = 586  # Vertical center of the name text area
 
 def generate_love_image(crush_name: str) -> BytesIO:
     """Generate love image with crush name drawn on it."""
+    if LOVE_IMAGE_TEMPLATE is None:
+        raise RuntimeError("Love image template not available")
+    if BENGALI_FONT is None:
+        raise RuntimeError("Font not available for text overlay")
+
     img = LOVE_IMAGE_TEMPLATE.copy()
     draw = ImageDraw.Draw(img)
 
@@ -343,35 +387,59 @@ def make_web_app(bot_app: Application) -> web.Application:
     @routes.get("/yes")
     async def handle_yes(request: web.Request) -> web.Response:
         token = request.rel_url.query.get("token", "")
+        logger.info(f"[/yes] Received request with token: {token[:8]}...")
         entry = tokens_store.pop(token, None)
 
-        if entry:
-            chat_id    = entry["chat_id"]
-            crush_name = entry["crush_name"]
-            try:
-                await bot_app.bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"🎉 *{crush_name} said YES!* 🎉\n\n"
-                        "❤️ তোমাকে ভালোবাসে! এখনই কথা বলো! 💕"
-                    ),
-                    parse_mode="Markdown",
-                )
-            except Exception as e:
-                logger.warning(f"Telegram notify failed: {e}")
-            # Send love image with crush name dynamically drawn on it
-            try:
-                photo_file = generate_love_image(crush_name)
-                await bot_app.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=photo_file,
-                    caption=f"💕 {crush_name} 💕",
-                )
-            except Exception as e:
-                logger.warning(f"Telegram photo send failed: {e}")
-            return web.Response(text=success_page(crush_name), content_type="text/html")
+        if not entry:
+            logger.warning(f"[/yes] Token NOT FOUND in store. Token: {token}. "
+                           f"Store has {len(tokens_store)} entries. "
+                           "Possible causes: app restarted (in-memory store lost), "
+                           "token already used, or invalid token.")
+            return web.Response(text=success_page("Someone special"), content_type="text/html")
 
-        return web.Response(text=success_page("Someone special"), content_type="text/html")
+        chat_id    = entry["chat_id"]
+        crush_name = entry["crush_name"]
+        logger.info(f"[/yes] Token valid. chat_id={chat_id}, crush_name={crush_name}")
+
+        # Step 1: Send text notification (most important - must succeed)
+        text_sent = False
+        try:
+            await bot_app.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"\ud83c\udf89 *{crush_name} said YES!* \ud83c\udf89\n\n"
+                    "\u2764\ufe0f \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09ad\u09be\u09b2\u09cb\u09ac\u09be\u09b8\u09c7! \u098f\u0996\u09a8\u0987 \u0995\u09a5\u09be \u09ac\u09b2\u09cb! \ud83d\udc95"
+                ),
+                parse_mode="Markdown",
+            )
+            text_sent = True
+            logger.info(f"[/yes] Text notification sent successfully to chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"[/yes] FAILED to send text notification to chat_id={chat_id}: {e}")
+
+        # Step 2: Send love image (optional - if this fails, text was already sent)
+        try:
+            photo_file = generate_love_image(crush_name)
+            await bot_app.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+            )
+            logger.info(f"[/yes] Love image sent successfully to chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"[/yes] FAILED to send love image to chat_id={chat_id}: {e}")
+            # If text also failed, try one more time with a simple message
+            if not text_sent:
+                try:
+                    await bot_app.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"{crush_name} said YES! \u2764\ufe0f",
+                    )
+                    logger.info(f"[/yes] Fallback plain text sent to chat_id={chat_id}")
+                except Exception as e2:
+                    logger.error(f"[/yes] Even fallback message FAILED for chat_id={chat_id}: {e2}")
+
+        return web.Response(text=success_page(crush_name), content_type="text/html")
 
     @routes.get("/health")
     async def health(_: web.Request) -> web.Response:
