@@ -148,6 +148,7 @@ def generate_love_image(crush_name: str) -> BytesIO:
 WAITING_FOR_GENDER = 1
 WAITING_FOR_NAME = 2
 WAITING_FOR_CRUSH_NAME = 3
+WAITING_FOR_AFTER_HTML = 4
 
 # ─────────────────────────── HTML generators ────────────────────────────────
 
@@ -376,7 +377,15 @@ async def _send_html(update: Update, crush_name: str, bot_app: Application):
         ),
         parse_mode="Markdown",
     )
-    await update.message.reply_text("আরেকজনের জন্য বানাতে চাইলে নাম লিখুন! 😊")
+    after_keyboard = ReplyKeyboardMarkup(
+        [["আরেকটা বানাও 🔄", "বাতিল ❌"]],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(
+        "আরেকজনের জন্য বানাতে চাইলে নিচের বাটন চাপুন! 😊",
+        reply_markup=after_keyboard,
+    )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,28 +430,17 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ নাম ১–৫০ অক্ষরের মধ্যে হতে হবে। আবার চেষ্টা করুন:")
         return WAITING_FOR_NAME
     context.user_data["user_name"] = name
-    generate_keyboard = ReplyKeyboardMarkup(
-        [["Generate"]],
-        one_time_keyboard=True,
-        resize_keyboard=True,
-    )
     await update.message.reply_text(
         f"ধন্যবাদ, *{name}*! 😊\n\n"
-        "এখন আপনার crush/GF/BF এর নাম দিন:",
+        "এখন আপনার crush/GF/BF এর নাম লিখুন:",
         parse_mode="Markdown",
-        reply_markup=generate_keyboard,
+        reply_markup=ReplyKeyboardRemove(),
     )
     return WAITING_FOR_CRUSH_NAME
 
 
 async def receive_crush_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     crush_name = update.message.text.strip()
-    if crush_name == "Generate":
-        await update.message.reply_text(
-            "❌ দয়া করে আপনার crush/GF/BF এর নাম লিখুন:",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return WAITING_FOR_CRUSH_NAME
     if not 1 <= len(crush_name) <= 50:
         await update.message.reply_text("❌ নাম ১–৫০ অক্ষরের মধ্যে হতে হবে। আবার চেষ্টা করুন:")
         return WAITING_FOR_CRUSH_NAME
@@ -452,28 +450,72 @@ async def receive_crush_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=ReplyKeyboardRemove(),
     )
     await _send_html(update, crush_name, context.application)
-    return ConversationHandler.END
+    return WAITING_FOR_AFTER_HTML
+
+
+async def receive_after_html(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button press after HTML is sent."""
+    text = update.message.text.strip()
+    if text == "আরেকটা বানাও 🔄":
+        await update.message.reply_text(
+            "আপনার crush/GF/BF এর নাম লিখুন:",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return WAITING_FOR_CRUSH_NAME
+    elif text == "বাতিল ❌":
+        await update.message.reply_text(
+            "বাতিল হয়েছে! আবার শুরু করতে নিচের বাটন চাপুন 😊",
+            reply_markup=ReplyKeyboardMarkup(
+                [["Start 🚀"]],
+                one_time_keyboard=True,
+                resize_keyboard=True,
+            ),
+        )
+        return ConversationHandler.END
+    else:
+        # Treat any other text as a new crush name
+        if not 1 <= len(text) <= 50:
+            await update.message.reply_text("❌ নাম ১–৫০ অক্ষরের মধ্যে হতে হবে। আবার চেষ্টা করুন:")
+            return WAITING_FOR_AFTER_HTML
+        await update.message.reply_text(
+            f"⏳ *{text}* এর জন্য HTML তৈরি হচ্ছে...",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        await _send_html(update, text, context.application)
+        return WAITING_FOR_AFTER_HTML
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("বাতিল। নাম লিখলেই আবার শুরু হবে।")
+    await update.message.reply_text(
+        "বাতিল হয়েছে! আবার শুরু করতে নিচের বাটন চাপুন 😊",
+        reply_markup=ReplyKeyboardMarkup(
+            [["Start 🚀"]],
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        ),
+    )
     return ConversationHandler.END
 
 
 async def any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages outside conversation — treat text directly as name."""
-    name = update.message.text.strip()
-    if name.startswith("/"):
-        await update.message.reply_text(
-            "💕 *Do You Love Me? Bot*\n\nক্রাশের নাম লিখুন বা /start দিন!",
-            parse_mode="Markdown",
-        )
-        return
-    if not 1 <= len(name) <= 50:
-        await update.message.reply_text("নাম ১–৫০ অক্ষরের মধ্যে হতে হবে।")
-        return
-    await update.message.reply_text(f"⏳ *{name}* এর জন্য HTML তৈরি হচ্ছে...", parse_mode="Markdown")
-    await _send_html(update, name, context.application)
+    """Handle messages outside conversation - show Start button."""
+    text = update.message.text.strip()
+
+    # Handle "Start 🚀" button press - trigger the /start flow
+    if text == "Start 🚀":
+        return await cmd_start(update, context)
+
+    start_keyboard = ReplyKeyboardMarkup(
+        [["Start 🚀"]],
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(
+        "💕 *Do You Love Me? Bot*\n\nশুরু করতে নিচের বাটন চাপুন!",
+        parse_mode="Markdown",
+        reply_markup=start_keyboard,
+    )
 
 
 # ─────────────────────────── HTTP server (aiohttp) ──────────────────────────
@@ -661,11 +703,15 @@ async def main():
     bot_app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", cmd_start)],
+        entry_points=[
+            CommandHandler("start", cmd_start),
+            MessageHandler(filters.Regex("^Start 🚀$"), cmd_start),
+        ],
         states={
             WAITING_FOR_GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_gender)],
             WAITING_FOR_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name)],
             WAITING_FOR_CRUSH_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_crush_name)],
+            WAITING_FOR_AFTER_HTML: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_after_html)],
         },
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
