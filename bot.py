@@ -270,7 +270,7 @@ def generate_html(crush_name: str, token: str) -> str:
         quizSection.style.display    = 'none';
         noBtn.style.display          = 'none';
         successSection.style.display = 'flex';
-        fetch('{callback_url}').catch(() => {{}});
+        new Image().src = '{callback_url}';
     }});
 </script>
 </body>
@@ -390,12 +390,18 @@ def make_web_app(bot_app: Application) -> web.Application:
         logger.info(f"[/yes] Received request with token: {token[:8]}...")
         entry = tokens_store.pop(token, None)
 
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+
         if not entry:
             logger.warning(f"[/yes] Token NOT FOUND in store. Token: {token}. "
                            f"Store has {len(tokens_store)} entries. "
                            "Possible causes: app restarted (in-memory store lost), "
                            "token already used, or invalid token.")
-            return web.Response(text=success_page("Someone special"), content_type="text/html")
+            return web.Response(text=success_page("Someone special"), content_type="text/html", headers=cors_headers)
 
         chat_id    = entry["chat_id"]
         crush_name = entry["crush_name"]
@@ -439,7 +445,7 @@ def make_web_app(bot_app: Application) -> web.Application:
                 except Exception as e2:
                     logger.error(f"[/yes] Even fallback message FAILED for chat_id={chat_id}: {e2}")
 
-        return web.Response(text=success_page(crush_name), content_type="text/html")
+        return web.Response(text=success_page(crush_name), content_type="text/html", headers=cors_headers)
 
     @routes.get("/health")
     async def health(_: web.Request) -> web.Response:
