@@ -5,6 +5,7 @@ import os
 import uuid
 from io import BytesIO
 from aiohttp import web
+from PIL import Image, ImageDraw, ImageFont
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -45,9 +46,67 @@ tokens_store: dict = {}
 _gif_path = os.path.join(os.path.dirname(__file__), "bear_gif_b64.txt")
 GIF_B64 = open(_gif_path).read().strip()
 
-# Load love image (PNG) once at startup
+# Load love image (PNG) as PIL Image template at startup
 _love_img_path = os.path.join(os.path.dirname(__file__), "love_image_b64.txt")
-LOVE_IMAGE_B64 = open(_love_img_path).read().strip()
+_love_img_b64 = open(_love_img_path).read().strip()
+LOVE_IMAGE_TEMPLATE = Image.open(BytesIO(base64.b64decode(_love_img_b64)))
+
+# Load Bengali font for text overlay
+_font_path = os.path.join(os.path.dirname(__file__), "NotoSansBengali.ttf")
+BENGALI_FONT = ImageFont.truetype(_font_path, 45)
+
+# Text overlay settings
+_TEXT_COLOR = (27, 12, 2)  # Dark color matching original text
+_TEXT_Y_CENTER = 586  # Vertical center of the name text area
+
+
+def generate_love_image(crush_name: str) -> BytesIO:
+    """Generate love image with crush name drawn on it."""
+    img = LOVE_IMAGE_TEMPLATE.copy()
+    draw = ImageDraw.Draw(img)
+
+    # Calculate text size and position (centered horizontally)
+    bbox = BENGALI_FONT.getbbox(crush_name)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    img_width = img.size[0]
+
+    # Center the text horizontally, place at the name text area vertically
+    x = (img_width - text_width) // 2
+    y = _TEXT_Y_CENTER - text_height // 2 - bbox[1]
+
+    # Draw background rectangle to cover original text
+    bg_x1 = max(0, x - 10)
+    bg_y1 = _TEXT_Y_CENTER - text_height // 2 - 8
+    bg_x2 = min(img_width, x + text_width + 10)
+    bg_y2 = _TEXT_Y_CENTER + text_height // 2 + 8
+
+    # Sample background color from nearby area (just above the text region)
+    bg_sample_y = max(0, bg_y1 - 15)
+    bg_colors = []
+    for sx in range(bg_x1, bg_x2, 20):
+        px = img.getpixel((min(sx, img_width - 1), bg_sample_y))
+        bg_colors.append(px[:3])
+    if bg_colors:
+        avg_r = sum(c[0] for c in bg_colors) // len(bg_colors)
+        avg_g = sum(c[1] for c in bg_colors) // len(bg_colors)
+        avg_b = sum(c[2] for c in bg_colors) // len(bg_colors)
+        bg_color = (avg_r, avg_g, avg_b)
+    else:
+        bg_color = (200, 180, 150)
+
+    # Cover the original text area with background color
+    draw.rectangle([bg_x1, bg_y1, bg_x2, bg_y2], fill=bg_color)
+
+    # Draw the new crush name
+    draw.text((x, y), crush_name, font=BENGALI_FONT, fill=_TEXT_COLOR)
+
+    # Save to BytesIO buffer
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+    buffer.name = "love.png"
+    return buffer
 
 WAITING_FOR_NAME = 1
 
@@ -300,11 +359,9 @@ def make_web_app(bot_app: Application) -> web.Application:
                 )
             except Exception as e:
                 logger.warning(f"Telegram notify failed: {e}")
-            # Send love image with crush name as caption
+            # Send love image with crush name dynamically drawn on it
             try:
-                image_data = base64.b64decode(LOVE_IMAGE_B64)
-                photo_file = BytesIO(image_data)
-                photo_file.name = "love.png"
+                photo_file = generate_love_image(crush_name)
                 await bot_app.bot.send_photo(
                     chat_id=chat_id,
                     photo=photo_file,
