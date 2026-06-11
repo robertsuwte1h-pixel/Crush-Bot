@@ -75,7 +75,7 @@ _font_path = os.path.join(_base_dir, "NotoSansBengali.ttf")
 BENGALI_FONT = None
 if os.path.isfile(_font_path):
     try:
-        BENGALI_FONT = ImageFont.truetype(_font_path, 45)
+        BENGALI_FONT = ImageFont.truetype(_font_path, 58)
         logger.info("[STARTUP] NotoSansBengali.ttf loaded OK")
     except Exception as e:
         logger.error(f"[STARTUP] NotoSansBengali.ttf load FAILED: {e}")
@@ -95,8 +95,11 @@ if BENGALI_FONT is None:
 logger.info(f"[STARTUP] Image generation available: {LOVE_IMAGE_TEMPLATE is not None and BENGALI_FONT is not None}")
 
 # Text overlay settings
-_TEXT_COLOR = (27, 12, 2)  # Dark color matching original text
-_TEXT_Y_CENTER = 586  # Vertical center of the name text area
+_TEXT_COLOR = (169, 49, 51)  # Pink/red color matching original text
+_TEXT_Y_CENTER = 150  # Vertical center of the name text area (Y=117-183)
+_BG_COVER_COLOR = (254, 240, 213)  # Warm cream background behind text
+_BG_COVER_Y1 = 115  # Top of background cover area
+_BG_COVER_Y2 = 185  # Bottom of background cover area
 
 
 def generate_love_image(crush_name: str) -> BytesIO:
@@ -119,28 +122,10 @@ def generate_love_image(crush_name: str) -> BytesIO:
     x = (img_width - text_width) // 2
     y = _TEXT_Y_CENTER - text_height // 2 - bbox[1]
 
-    # Draw background rectangle to cover original text
+    # Cover the original text area with cream background color
     bg_x1 = max(0, x - 10)
-    bg_y1 = _TEXT_Y_CENTER - text_height // 2 - 8
     bg_x2 = min(img_width, x + text_width + 10)
-    bg_y2 = _TEXT_Y_CENTER + text_height // 2 + 8
-
-    # Sample background color from nearby area (just above the text region)
-    bg_sample_y = max(0, bg_y1 - 15)
-    bg_colors = []
-    for sx in range(bg_x1, bg_x2, 20):
-        px = img.getpixel((min(sx, img_width - 1), bg_sample_y))
-        bg_colors.append(px[:3])
-    if bg_colors:
-        avg_r = sum(c[0] for c in bg_colors) // len(bg_colors)
-        avg_g = sum(c[1] for c in bg_colors) // len(bg_colors)
-        avg_b = sum(c[2] for c in bg_colors) // len(bg_colors)
-        bg_color = (avg_r, avg_g, avg_b)
-    else:
-        bg_color = (200, 180, 150)
-
-    # Cover the original text area with background color
-    draw.rectangle([bg_x1, bg_y1, bg_x2, bg_y2], fill=bg_color)
+    draw.rectangle([bg_x1, _BG_COVER_Y1, bg_x2, _BG_COVER_Y2], fill=_BG_COVER_COLOR)
 
     # Draw the new crush name
     draw.text((x, y), crush_name, font=BENGALI_FONT, fill=_TEXT_COLOR)
