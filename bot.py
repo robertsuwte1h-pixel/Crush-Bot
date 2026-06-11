@@ -2,10 +2,10 @@ import asyncio
 import base64
 import logging
 import os
+import re
 import uuid
 from io import BytesIO
 from aiohttp import web
-from PIL import Image, ImageDraw, ImageFont
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -41,109 +41,56 @@ logger = logging.getLogger(__name__)
 logger.info(f"[STARTUP] SERVER_URL = {SERVER_URL}")
 logger.info(f"[STARTUP] RAILWAY_PUBLIC_DOMAIN = '{_railway_domain}'")
 
-# In-memory token store  {token: {chat_id, crush_name}}
+# In-memory token store  {token: {chat_id, crush_name, user_name, gender}}
 tokens_store: dict = {}
 
 # ── Startup file checks and fault-tolerant loading ──────────────────────────
 _base_dir = os.path.dirname(__file__)
 
-# Load GIF once at startup
-_gif_path = os.path.join(_base_dir, "bear_gif_b64.txt")
-if os.path.isfile(_gif_path):
-    GIF_B64 = open(_gif_path).read().strip()
-    logger.info(f"[STARTUP] bear_gif_b64.txt loaded OK ({len(GIF_B64)} chars)")
-else:
-    GIF_B64 = ""
-    logger.warning("[STARTUP] bear_gif_b64.txt NOT FOUND - GIF will be missing")
 
-# Load love image (PNG) as PIL Image template at startup
-_love_img_path = os.path.join(_base_dir, "love_image_b64.txt")
-LOVE_IMAGE_TEMPLATE = None
-if os.path.isfile(_love_img_path):
+def _extract_gif_b64_from_html(filepath: str) -> str:
+    """Extract base64 GIF data from an HTML file containing <img src='data:image/gif;base64,...'>."""
+    if not os.path.isfile(filepath):
+        logger.warning(f"[STARTUP] File NOT FOUND: {filepath}")
+        return ""
     try:
-        _love_img_b64 = open(_love_img_path).read().strip()
-        LOVE_IMAGE_TEMPLATE = Image.open(BytesIO(base64.b64decode(_love_img_b64)))
-        logger.info("[STARTUP] love_image_b64.txt loaded OK")
+        content = open(filepath, encoding="utf-8").read()
+        match = re.search(r"data:image/gif;base64,([A-Za-z0-9+/=\s]+)", content)
+        if match:
+            b64_data = match.group(1).replace("\n", "").replace("\r", "").replace(" ", "")
+            logger.info(f"[STARTUP] Extracted GIF from {os.path.basename(filepath)} ({len(b64_data)} chars)")
+            return b64_data
+        else:
+            logger.warning(f"[STARTUP] No base64 GIF found in {filepath}")
+            return ""
     except Exception as e:
-        logger.error(f"[STARTUP] love_image_b64.txt load FAILED: {e}")
-        LOVE_IMAGE_TEMPLATE = None
+        logger.error(f"[STARTUP] Failed to read {filepath}: {e}")
+        return ""
+
+
+# Load GIF base64 data from HTML wrapper files
+HANDSOME_GIF_B64 = _extract_gif_b64_from_html(os.path.join(_base_dir, "handsome gif.html"))
+CUTE_GIRL_GIF_B64 = _extract_gif_b64_from_html(os.path.join(_base_dir, "cute girl gif.html"))
+YES_GIF_B64 = _extract_gif_b64_from_html(os.path.join(_base_dir, "After saying yes.html"))
+CUTE_GIF_B64 = _extract_gif_b64_from_html(os.path.join(_base_dir, "cute.html"))
+POPOS_GIF_B64 = _extract_gif_b64_from_html(os.path.join(_base_dir, "popos.html"))
+PROPOSE_GIF_B64 = _extract_gif_b64_from_html(os.path.join(_base_dir, "propose.html"))
+
+# Load Image.html template
+_image_html_path = os.path.join(_base_dir, "Image.html")
+IMAGE_HTML_TEMPLATE = ""
+if os.path.isfile(_image_html_path):
+    IMAGE_HTML_TEMPLATE = open(_image_html_path, encoding="utf-8").read()
+    # Remove markdown code fence markers if present (file starts with ```html)
+    IMAGE_HTML_TEMPLATE = re.sub(r'^```html\s*\n', '', IMAGE_HTML_TEMPLATE)
+    IMAGE_HTML_TEMPLATE = re.sub(r'\n```\s*$', '', IMAGE_HTML_TEMPLATE)
+    logger.info(f"[STARTUP] Image.html loaded OK ({len(IMAGE_HTML_TEMPLATE)} chars)")
 else:
-    logger.warning("[STARTUP] love_image_b64.txt NOT FOUND - love image feature disabled")
+    logger.warning("[STARTUP] Image.html NOT FOUND")
 
-# Load Bengali font for text overlay (with fallback to default font)
-_font_path = os.path.join(_base_dir, "NotoSansBengali.ttf")
-BENGALI_FONT = None
-if os.path.isfile(_font_path):
-    try:
-        BENGALI_FONT = ImageFont.truetype(_font_path, 58)
-        logger.info("[STARTUP] NotoSansBengali.ttf loaded OK")
-    except Exception as e:
-        logger.error(f"[STARTUP] NotoSansBengali.ttf load FAILED: {e}")
-        BENGALI_FONT = None
-else:
-    logger.warning("[STARTUP] NotoSansBengali.ttf NOT FOUND")
-
-# Fallback to PIL default font if truetype font unavailable
-if BENGALI_FONT is None:
-    try:
-        BENGALI_FONT = ImageFont.load_default()
-        logger.info("[STARTUP] Using PIL default font as fallback")
-    except Exception as e:
-        logger.error(f"[STARTUP] Even default font failed to load: {e}")
-        BENGALI_FONT = None
-
-logger.info(f"[STARTUP] Image generation available: {LOVE_IMAGE_TEMPLATE is not None and BENGALI_FONT is not None}")
-
-# Text overlay settings
-_TEXT_COLOR = (169, 49, 51)  # Pink/red color matching original text
-_TEXT_Y_CENTER = 150  # Vertical center of the name text area (Y=117-183)
-_BG_COVER_COLOR = (254, 240, 213)  # Warm cream background behind text
-_BG_COVER_Y1 = 115  # Top of background cover area
-_BG_COVER_Y2 = 185  # Bottom of background cover area
-
-
-def generate_love_image(crush_name: str) -> BytesIO:
-    """Generate love image with crush name drawn on it."""
-    if LOVE_IMAGE_TEMPLATE is None:
-        raise RuntimeError("Love image template not available")
-    if BENGALI_FONT is None:
-        raise RuntimeError("Font not available for text overlay")
-
-    img = LOVE_IMAGE_TEMPLATE.copy()
-    draw = ImageDraw.Draw(img)
-
-    # Calculate text size and position (centered horizontally)
-    bbox = BENGALI_FONT.getbbox(crush_name)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    img_width = img.size[0]
-
-    # Center the text horizontally, place at the name text area vertically
-    x = (img_width - text_width) // 2
-    y = _TEXT_Y_CENTER - text_height // 2 - bbox[1]
-
-    # Cover the original text area with cream background color
-    bg_x1 = max(0, x - 10)
-    bg_x2 = min(img_width, x + text_width + 10)
-    draw.rectangle([bg_x1, _BG_COVER_Y1, bg_x2, _BG_COVER_Y2], fill=_BG_COVER_COLOR)
-
-    # Draw the new crush name
-    draw.text((x, y), crush_name, font=BENGALI_FONT, fill=_TEXT_COLOR)
-
-    # Convert to RGB (JPEG doesn't support alpha) with white background
-    if img.mode == "RGBA":
-        background = Image.new("RGB", img.size, (255, 255, 255))
-        background.paste(img, mask=img.split()[3])  # Use alpha channel as mask
-        img = background
-    elif img.mode != "RGB":
-        img = img.convert("RGB")
-
-    # Save as JPEG to BytesIO buffer (much smaller than PNG)
-    buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=70)
-    buffer.seek(0)
-    buffer.name = "love.jpg"
-    return buffer
+logger.info(f"[STARTUP] YES_GIF available: {bool(YES_GIF_B64)}")
+logger.info(f"[STARTUP] HANDSOME_GIF available: {bool(HANDSOME_GIF_B64)}")
+logger.info(f"[STARTUP] CUTE_GIRL_GIF available: {bool(CUTE_GIRL_GIF_B64)}")
 
 WAITING_FOR_GENDER = 1
 WAITING_FOR_NAME = 2
@@ -152,172 +99,188 @@ WAITING_FOR_AFTER_HTML = 4
 
 # ─────────────────────────── HTML generators ────────────────────────────────
 
-def generate_html(crush_name: str, token: str) -> str:
-    gif_src      = "data:image/gif;base64," + GIF_B64
+def _generate_yes_card_html(crush_name: str, user_name: str) -> str:
+    """Generate the Image.html scrapbook card with crush_name and user_name pre-filled.
+    This is sent to the user as a document when crush says Yes."""
+    html = IMAGE_HTML_TEMPLATE
+
+    # Replace crushNameInput default value "Toma" with actual crush name
+    html = html.replace(
+        'id="crushNameInput" value="Toma"',
+        f'id="crushNameInput" value="{crush_name}" readonly'
+    )
+    # Replace creatorNameInput default value "Shuvo" with actual user name
+    html = html.replace(
+        'id="creatorNameInput" value="Shuvo"',
+        f'id="creatorNameInput" value="{user_name}" readonly'
+    )
+    # Replace crushNameDisplay text "Toma" with crush name
+    html = html.replace(
+        'id="crushNameDisplay" class="border-b-2 border-dotted border-rose-300 px-2 min-w-[60px] text-pink-600 font-bold italic">Toma</span>',
+        f'id="crushNameDisplay" class="border-b-2 border-dotted border-rose-300 px-2 min-w-[60px] text-pink-600 font-bold italic">{crush_name}</span>'
+    )
+    # Replace creatorNameDisplay text "Shuvo" with user name
+    html = html.replace(
+        'id="creatorNameDisplay" class="bg-amber-100 text-amber-800 px-3 py-0.5 rounded-full font-bold">Shuvo</span>',
+        f'id="creatorNameDisplay" class="bg-amber-100 text-amber-800 px-3 py-0.5 rounded-full font-bold">{user_name}</span>'
+    )
+
+    return html
+
+
+def generate_html(crush_name: str, user_name: str, gender: str, token: str) -> str:
+    """Generate the scrapbook HTML card using Image.html template with names pre-filled,
+    gender-appropriate GIF, and Yes/No buttons with callback URL."""
     callback_url = f"{SERVER_URL}/yes?token={token}"
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Do you love me?</title>
+
+    # Select gender-appropriate GIF
+    if gender == "\u099b\u09c7\u09b2\u09c7":  # ছেলে
+        gender_gif_b64 = HANDSOME_GIF_B64
+    else:  # মেয়ে
+        gender_gif_b64 = CUTE_GIRL_GIF_B64
+
+    # Start with Image.html template
+    html = IMAGE_HTML_TEMPLATE
+
+    # Replace crushNameInput default value "Toma" with actual crush name
+    html = html.replace(
+        'id="crushNameInput" value="Toma"',
+        f'id="crushNameInput" value="{crush_name}" readonly'
+    )
+    # Replace creatorNameInput default value "Shuvo" with actual user name
+    html = html.replace(
+        'id="creatorNameInput" value="Shuvo"',
+        f'id="creatorNameInput" value="{user_name}" readonly'
+    )
+    # Replace crushNameDisplay text "Toma" with crush name
+    html = html.replace(
+        'id="crushNameDisplay" class="border-b-2 border-dotted border-rose-300 px-2 min-w-[60px] text-pink-600 font-bold italic">Toma</span>',
+        f'id="crushNameDisplay" class="border-b-2 border-dotted border-rose-300 px-2 min-w-[60px] text-pink-600 font-bold italic">{crush_name}</span>'
+    )
+    # Replace creatorNameDisplay text "Shuvo" with user name
+    html = html.replace(
+        'id="creatorNameDisplay" class="bg-amber-100 text-amber-800 px-3 py-0.5 rounded-full font-bold">Shuvo</span>',
+        f'id="creatorNameDisplay" class="bg-amber-100 text-amber-800 px-3 py-0.5 rounded-full font-bold">{user_name}</span>'
+    )
+
+    # Build gender GIF section
+    gender_gif_section = ""
+    if gender_gif_b64:
+        gender_gif_src = "data:image/gif;base64," + gender_gif_b64
+        gender_label = "\U0001f468 Handsome Boy" if gender == "\u099b\u09c7\u09b2\u09c7" else "\U0001f469 Cute Girl"
+        gender_gif_section = f'''
+        <div style="text-align:center; margin: 15px 0;">
+            <p style="font-size:12px; color:#888; margin-bottom:5px;">{gender_label}</p>
+            <img src="{gender_gif_src}" alt="Gender GIF" style="width:180px; height:auto; border-radius:12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+        </div>'''
+
+    # Build propose/popos/cute GIF decoration section
+    decoration_gifs = ""
+    gif_items = []
+    if PROPOSE_GIF_B64:
+        gif_items.append(("data:image/gif;base64," + PROPOSE_GIF_B64, "Propose"))
+    if POPOS_GIF_B64:
+        gif_items.append(("data:image/gif;base64," + POPOS_GIF_B64, "Love"))
+    if CUTE_GIF_B64:
+        gif_items.append(("data:image/gif;base64," + CUTE_GIF_B64, "Cute"))
+
+    if gif_items:
+        items_html = ""
+        for src, alt in gif_items:
+            items_html += f'<img src="{src}" alt="{alt}" style="width:100px; height:100px; object-fit:cover; border-radius:10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">\n'
+        decoration_gifs = f'''
+        <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap; margin: 15px 0;">
+            {items_html}
+        </div>'''
+
+    # Build Yes/No section with dodging No button
+    yes_no_section = f'''
+    <!-- Yes/No Section -->
+    <div id="yes-no-section" style="text-align:center; margin-top:20px; padding:20px; background:linear-gradient(135deg, #fff5f7, #ffe8f0); border-radius:16px; border:1px solid #fecdd3;">
+        <h2 style="font-size:1.5rem; color:#f43f5e; font-family:'Pacifico',cursive; margin-bottom:8px;">Do you love me?</h2>
+        <p style="color:#888; font-size:0.9rem; margin-bottom:16px;">\U0001f495 {crush_name} \U0001f495</p>
+        <div style="display:flex; justify-content:center; gap:20px; position:relative;">
+            <button id="yes-btn" onclick="handleYes()" style="background:#f43f5e; color:white; border:none; border-radius:50px; padding:12px 38px; font-size:1.05rem; font-weight:bold; cursor:pointer; box-shadow:0 5px 15px rgba(244,63,94,0.35); transition: transform 0.15s;">Yes \u2764\ufe0f</button>
+            <button id="no-btn" style="background:#f43f5e; color:white; border:none; border-radius:50px; padding:12px 38px; font-size:1.05rem; font-weight:bold; cursor:pointer; box-shadow:0 5px 15px rgba(244,63,94,0.35); transition: transform 0.15s;">No</button>
+        </div>
+    </div>
+    <div id="success-section" style="display:none; text-align:center; margin-top:20px; padding:20px;">
+        <div style="font-size:3.5rem; animation: pulse 0.8s infinite alternate;">\u2764\ufe0f</div>
+        <h2 style="font-size:1.6rem; color:#f43f5e; margin-top:10px; font-weight:800;">I knew it! \U0001f970</h2>
+        <p style="color:#888; margin-top:8px; font-size:.95rem;">Love you, {crush_name}! \U0001f496</p>
+    </div>
     <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            display: flex; justify-content: center; align-items: center;
-            min-height: 100vh;
-            background: #1e2235;
-            font-family: 'Segoe UI', sans-serif;
-            overflow: hidden;
-        }}
-        .card {{
-            background: #fff; border-radius: 20px;
-            padding: 40px 50px 45px; text-align: center;
-            width: 340px; position: relative;
-        }}
-        .bears {{ position: relative; display: inline-block; margin-bottom: 18px; }}
-        .speech-bubble {{
-            position: absolute; top: -4px; right: 0;
-            background: white; border: 1.5px solid #ccc;
-            border-radius: 12px; padding: 4px 10px;
-            font-size: 11px; color: #555; white-space: nowrap;
-        }}
-        .speech-bubble::after {{
-            content: ''; position: absolute; bottom: -8px; left: 14px;
-            border-width: 8px 6px 0; border-style: solid;
-            border-color: #ccc transparent transparent;
-        }}
-        .speech-bubble::before {{
-            content: ''; position: absolute; bottom: -6px; left: 15px;
-            border-width: 7px 5px 0; border-style: solid;
-            border-color: white transparent transparent; z-index: 1;
-        }}
-        h1 {{ font-size: 1.75rem; font-weight: 800; color: #222; margin-bottom: 8px; }}
-        .name-tag {{ font-size: 1.1rem; color: #f06292; font-weight: 700; margin-bottom: 22px; }}
-        .btn-container {{ display: flex; justify-content: center; gap: 20px; }}
-        .btn {{
-            background: #f06292; color: white; border: none;
-            border-radius: 50px; padding: 12px 38px;
-            font-size: 1.05rem; font-weight: bold; cursor: pointer;
-            box-shadow: 0 5px 15px rgba(240,98,146,0.35);
-            transition: transform 0.15s, background 0.15s;
-        }}
-        .btn:hover {{ background: #e91e8c; transform: scale(1.07); }}
         #no-btn.dodging {{
             position: fixed; border-radius: 50px; z-index: 100;
             transition: left 0.05s, top 0.05s;
         }}
-        #success-section {{ display: none; flex-direction: column; align-items: center; }}
-        #success-section h2 {{ font-size: 1.6rem; color: #f06292; margin-top: 10px; font-weight: 800; }}
-        .heart-anim {{ font-size: 3.5rem; animation: pulse 0.8s infinite alternate; }}
         @keyframes pulse {{ from {{ transform: scale(1); }} to {{ transform: scale(1.25); }} }}
     </style>
-</head>
-<body>
-<div class="card">
-    <div id="quiz-section">
-        <div class="bears">
-            <img src="{gif_src}" alt="Cute Bears" style="width:190px;height:190px;object-fit:contain;">
-            <div class="speech-bubble">Reply me</div>
-        </div>
-        <h1>Do you love me?</h1>
-        <p class="name-tag">💕 {crush_name} 💕</p>
-        <div class="btn-container">
-            <button id="yes-btn" class="btn">Yes</button>
-            <button id="no-btn" class="btn">No</button>
-        </div>
-    </div>
-    <div id="success-section">
-        <div class="heart-anim">❤️</div><br>
-        <img src="{gif_src}" alt="Cute Bears" style="width:160px;height:160px;object-fit:contain;">
-        <h2>I knew it! 🥰</h2>
-        <p style="color:#888;margin-top:8px;font-size:.95rem;">Love you, {crush_name}! 💖</p>
-    </div>
-</div>
-<script>
-    const noBtn  = document.getElementById('no-btn');
-    const yesBtn = document.getElementById('yes-btn');
-    const quizSection    = document.getElementById('quiz-section');
-    const successSection = document.getElementById('success-section');
-    let isDodging = false;
+    <script>
+        const noBtn  = document.getElementById('no-btn');
+        const yesBtn = document.getElementById('yes-btn');
+        const yesNoSection    = document.getElementById('yes-no-section');
+        const successSection2 = document.getElementById('success-section');
+        let isDodging = false;
 
-    function startDodging() {{
-        if (!isDodging) {{
-            isDodging = true;
-            const r = noBtn.getBoundingClientRect();
-            noBtn.style.left  = r.left + 'px';
-            noBtn.style.top   = r.top  + 'px';
-            noBtn.style.width = noBtn.offsetWidth + 'px';
-            noBtn.classList.add('dodging');
-            document.body.appendChild(noBtn);
-        }}
-        const m = 60;
-        const x = Math.floor(Math.random() * (window.innerWidth  - noBtn.offsetWidth  - m)) + m;
-        const y = Math.floor(Math.random() * (window.innerHeight - noBtn.offsetHeight - m)) + m;
-        noBtn.style.left = x + 'px';
-        noBtn.style.top  = y + 'px';
-    }}
-
-    noBtn.addEventListener('mouseover',  startDodging);
-    noBtn.addEventListener('touchstart', (e) => {{ e.preventDefault(); startDodging(); }});
-    noBtn.addEventListener('click',      startDodging);
-
-    yesBtn.addEventListener('click', () => {{
-        quizSection.style.display    = 'none';
-        noBtn.style.display          = 'none';
-        successSection.style.display = 'flex';
-
-        var callbackUrl = '{callback_url}';
-        var notified = false;
-
-        // Method 1: navigator.sendBeacon (most reliable for mobile/background)
-        try {{
-            if (navigator.sendBeacon) {{
-                var sent = navigator.sendBeacon(callbackUrl);
-                console.log('[YES] sendBeacon result:', sent);
-                if (sent) notified = true;
+        function startDodging() {{
+            if (!isDodging) {{
+                isDodging = true;
+                const r = noBtn.getBoundingClientRect();
+                noBtn.style.left  = r.left + 'px';
+                noBtn.style.top   = r.top  + 'px';
+                noBtn.style.width = noBtn.offsetWidth + 'px';
+                noBtn.classList.add('dodging');
+                document.body.appendChild(noBtn);
             }}
-        }} catch(e) {{
-            console.warn('[YES] sendBeacon failed:', e);
+            const m = 60;
+            const x = Math.floor(Math.random() * (window.innerWidth  - noBtn.offsetWidth  - m)) + m;
+            const y = Math.floor(Math.random() * (window.innerHeight - noBtn.offsetHeight - m)) + m;
+            noBtn.style.left = x + 'px';
+            noBtn.style.top  = y + 'px';
         }}
 
-        // Method 2: Image pixel (backup - works cross-origin)
-        try {{
-            var img = new Image();
-            img.onload = function() {{
-                console.log('[YES] Image callback succeeded');
-            }};
-            img.onerror = function() {{
-                console.warn('[YES] Image callback failed, trying fetch...');
-                // Method 3: fetch as last resort
-                try {{
-                    fetch(callbackUrl, {{ mode: 'no-cors', cache: 'no-store' }}).then(function() {{
-                        console.log('[YES] fetch callback succeeded');
-                    }}).catch(function(e) {{
-                        console.error('[YES] fetch also failed:', e);
-                    }});
-                }} catch(e2) {{
-                    console.error('[YES] fetch not available:', e2);
-                }}
-            }};
-            img.src = callbackUrl;
-        }} catch(e) {{
-            console.warn('[YES] Image approach failed:', e);
-        }}
+        noBtn.addEventListener('mouseover',  startDodging);
+        noBtn.addEventListener('touchstart', function(e) {{ e.preventDefault(); startDodging(); }});
+        noBtn.addEventListener('click',      startDodging);
 
-        // Method 4: If sendBeacon was not available or failed, also try fetch
-        if (!notified) {{
+        function handleYes() {{
+            yesNoSection.style.display    = 'none';
+            noBtn.style.display           = 'none';
+            successSection2.style.display = 'block';
+
+            var callbackUrl = '{callback_url}';
+            var notified = false;
+
             try {{
-                fetch(callbackUrl, {{ mode: 'no-cors', cache: 'no-store' }});
-                console.log('[YES] fetch fired as additional backup');
-            }} catch(e) {{
-                console.warn('[YES] backup fetch failed:', e);
+                if (navigator.sendBeacon) {{
+                    var sent = navigator.sendBeacon(callbackUrl);
+                    if (sent) notified = true;
+                }}
+            }} catch(e) {{}}
+
+            try {{
+                var img = new Image();
+                img.onerror = function() {{
+                    try {{ fetch(callbackUrl, {{ mode: 'no-cors', cache: 'no-store' }}); }} catch(e2) {{}}
+                }};
+                img.src = callbackUrl;
+            }} catch(e) {{}}
+
+            if (!notified) {{
+                try {{ fetch(callbackUrl, {{ mode: 'no-cors', cache: 'no-store' }}); }} catch(e) {{}}
             }}
+
+            // Trigger love shower on yes
+            if (typeof triggerLoveShower === 'function') triggerLoveShower();
         }}
-    }});
-</script>
-</body>
-</html>"""
+    </script>'''
+
+    # Insert gender GIF, decoration GIFs, and Yes/No section before closing </body>
+    insert_content = f"{gender_gif_section}\n{decoration_gifs}\n{yes_no_section}"
+    html = html.replace("</body>", f"{insert_content}\n</body>")
+
+    return html
 
 
 def success_page(name: str) -> str:
@@ -358,11 +321,16 @@ def success_page(name: str) -> str:
 
 # ─────────────────────────── Telegram handlers ──────────────────────────────
 
-async def _send_html(update: Update, crush_name: str, bot_app: Application):
+async def _send_html(update: Update, crush_name: str, bot_app: Application, user_name: str = "", gender: str = ""):
     token = str(uuid.uuid4())
-    tokens_store[token] = {"chat_id": str(update.message.chat_id), "crush_name": crush_name}
+    tokens_store[token] = {
+        "chat_id": str(update.message.chat_id),
+        "crush_name": crush_name,
+        "user_name": user_name,
+        "gender": gender,
+    }
 
-    html_bytes = generate_html(crush_name, token).encode("utf-8")
+    html_bytes = generate_html(crush_name, user_name, gender, token).encode("utf-8")
     safe       = crush_name.replace(" ", "_").replace("/", "_")
     filename   = f"do_you_love_me_{safe}.html"
 
@@ -370,38 +338,38 @@ async def _send_html(update: Update, crush_name: str, bot_app: Application):
         document=html_bytes,
         filename=filename,
         caption=(
-            f"💖 *{crush_name}* এর জন্য HTML ফাইল তৈরি হয়েছে!\n\n"
-            "📲 ফাইলটা ডাউনলোড করে তাকে পাঠান।\n"
-            "সে ব্রাউজারে ওপেন করলে কিউট পেজ দেখবে!\n\n"
-            "যদি *Yes* চাপে — তোমার কাছে notification আসবে! 🥳❤️"
+            f"\U0001f496 *{crush_name}* \u098f\u09b0 \u099c\u09a8\u09cd\u09af HTML \u09ab\u09be\u0987\u09b2 \u09a4\u09c8\u09b0\u09bf \u09b9\u09df\u09c7\u099b\u09c7!\n\n"
+            "\U0001f4f2 \u09ab\u09be\u0987\u09b2\u099f\u09be \u09a1\u09be\u0989\u09a8\u09b2\u09cb\u09a1 \u0995\u09b0\u09c7 \u09a4\u09be\u0995\u09c7 \u09aa\u09be\u09a0\u09be\u09a8\u0964\n"
+            "\u09b8\u09c7 \u09ac\u09cd\u09b0\u09be\u0989\u099c\u09be\u09b0\u09c7 \u0993\u09aa\u09c7\u09a8 \u0995\u09b0\u09b2\u09c7 \u0995\u09bf\u0989\u099f \u09aa\u09c7\u099c \u09a6\u09c7\u0996\u09ac\u09c7!\n\n"
+            "\u09af\u09a6\u09bf *Yes* \u099a\u09be\u09aa\u09c7 \u2014 \u09a4\u09cb\u09ae\u09be\u09b0 \u0995\u09be\u099b\u09c7 notification \u0986\u09b8\u09ac\u09c7! \U0001f973\u2764\ufe0f"
         ),
         parse_mode="Markdown",
     )
 
-    # Send the love image preview to the user
-    try:
-        photo_file = generate_love_image(crush_name)
-        buffer_size = photo_file.getbuffer().nbytes
-        logger.info(f"[_send_html] Love image generated for preview: {buffer_size} bytes")
-        photo_file.seek(0)
-        await update.message.reply_photo(
-            photo=photo_file,
-            caption=f"💕 {crush_name} — Yes চাপলে এই ছবিটা তোমাকে পাঠানো হবে!",
-            read_timeout=30,
-            write_timeout=30,
-            connect_timeout=30,
-        )
-        logger.info(f"[_send_html] Love image preview sent to user")
-    except Exception as e:
-        logger.error(f"[_send_html] Failed to send love image preview: {e}", exc_info=True)
+    # Send the "After saying yes" GIF as a preview
+    if YES_GIF_B64:
+        try:
+            gif_bytes = base64.b64decode(YES_GIF_B64)
+            gif_buffer = BytesIO(gif_bytes)
+            gif_buffer.name = "love_yes.gif"
+            await update.message.reply_animation(
+                animation=gif_buffer,
+                caption=f"\U0001f495 {crush_name} Yes \u099a\u09be\u09aa\u09b2\u09c7 \u098f\u0987 GIF \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09aa\u09be\u09a0\u09be\u09a8\u09cb \u09b9\u09ac\u09c7!",
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30,
+            )
+            logger.info(f"[_send_html] Yes GIF preview sent to user")
+        except Exception as e:
+            logger.error(f"[_send_html] Failed to send Yes GIF preview: {e}", exc_info=True)
 
     after_keyboard = ReplyKeyboardMarkup(
-        [["আরেকটা বানাও 🔄", "বাতিল ❌"]],
+        [["\u0986\u09b0\u09c7\u0995\u099f\u09be \u09ac\u09be\u09a8\u09be\u0993 \U0001f504", "\u09ac\u09be\u09a4\u09bf\u09b2 \u274c"]],
         one_time_keyboard=True,
         resize_keyboard=True,
     )
     await update.message.reply_text(
-        "আরেকজনের জন্য বানাতে চাইলে নিচের বাটন চাপুন! 😊",
+        "\u0986\u09b0\u09c7\u0995\u099c\u09a8\u09c7\u09b0 \u099c\u09a8\u09cd\u09af \u09ac\u09be\u09a8\u09be\u09a4\u09c7 \u099a\u09be\u0987\u09b2\u09c7 \u09a8\u09bf\u099a\u09c7\u09b0 \u09ac\u09be\u099f\u09a8 \u099a\u09be\u09aa\u09c1\u09a8! \U0001f60a",
         reply_markup=after_keyboard,
     )
 
@@ -467,7 +435,9 @@ async def receive_crush_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await _send_html(update, crush_name, context.application)
+    user_name = context.user_data.get("user_name", "")
+    gender = context.user_data.get("gender", "")
+    await _send_html(update, crush_name, context.application, user_name=user_name, gender=gender)
     return WAITING_FOR_AFTER_HTML
 
 
@@ -500,7 +470,9 @@ async def receive_after_html(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove(),
         )
-        await _send_html(update, text, context.application)
+        user_name = context.user_data.get("user_name", "")
+        gender = context.user_data.get("gender", "")
+        await _send_html(update, text, context.application, user_name=user_name, gender=gender)
         return WAITING_FOR_AFTER_HTML
 
 
@@ -564,11 +536,11 @@ def make_web_app(bot_app: Application) -> web.Application:
                            f"Store has {len(tokens_store)} entries. "
                            "Possible causes: app restarted (in-memory store lost), "
                            "token already used, or invalid token.")
-            # Return 1x1 pixel GIF even for invalid tokens (so Image() completes)
             return web.Response(body=PIXEL_GIF, content_type="image/gif", headers=cors_headers)
 
         chat_id    = entry["chat_id"]
         crush_name = entry["crush_name"]
+        user_name  = entry.get("user_name", "")
         logger.info(f"[/yes] Token valid. chat_id={chat_id}, crush_name={crush_name}")
 
         # Step 1: Send text notification (most important - must succeed)
@@ -577,8 +549,8 @@ def make_web_app(bot_app: Application) -> web.Application:
             await bot_app.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"\ud83c\udf89 *{crush_name} said YES!* \ud83c\udf89\n\n"
-                    "\u2764\ufe0f \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09ad\u09be\u09b2\u09cb\u09ac\u09be\u09b8\u09c7! \u098f\u0996\u09a8\u0987 \u0995\u09a5\u09be \u09ac\u09b2\u09cb! \ud83d\udc95"
+                    f"\U0001f389 *{crush_name} said YES!* \U0001f389\n\n"
+                    "\u2764\ufe0f \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09ad\u09be\u09b2\u09cb\u09ac\u09be\u09b8\u09c7! \u098f\u0996\u09a8\u0987 \u0995\u09a5\u09be \u09ac\u09b2\u09cb! \U0001f495"
                 ),
                 parse_mode="Markdown",
             )
@@ -587,56 +559,56 @@ def make_web_app(bot_app: Application) -> web.Application:
         except Exception as e:
             logger.error(f"[/yes] FAILED to send text notification to chat_id={chat_id}: {e}")
 
-        # Step 2: Send love image (optional - if this fails, text was already sent)
-        try:
-            photo_file = generate_love_image(crush_name)
-            buffer_size = photo_file.getbuffer().nbytes
-            logger.info(f"[/yes] Love image generated: {buffer_size} bytes for crush_name='{crush_name}'")
-            photo_file.seek(0)  # Ensure buffer is at start before sending
-            await bot_app.bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_file,
-                caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
-                read_timeout=30,
-                write_timeout=30,
-                connect_timeout=30,
-            )
-            logger.info(f"[/yes] Love image sent successfully to chat_id={chat_id}")
-        except Exception as e:
-            logger.error(f"[/yes] send_photo FAILED, trying send_document as backup: {e}", exc_info=True)
-            # Backup: try sending as document
+        # Step 2: Send "After saying yes" GIF as animation
+        if YES_GIF_B64:
             try:
-                photo_file.seek(0)
-                await bot_app.bot.send_document(
+                gif_bytes = base64.b64decode(YES_GIF_B64)
+                gif_buffer = BytesIO(gif_bytes)
+                gif_buffer.name = "love_yes.gif"
+                await bot_app.bot.send_animation(
                     chat_id=chat_id,
-                    document=photo_file,
-                    filename="love.jpg",
-                    caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+                    animation=gif_buffer,
+                    caption=f"\U0001f495 {crush_name} \U0001f495",
                     read_timeout=30,
                     write_timeout=30,
                     connect_timeout=30,
                 )
-                logger.info(f"[/yes] Love image sent as DOCUMENT to chat_id={chat_id}")
-            except Exception as e2:
-                logger.error(f"[/yes] send_document also FAILED for chat_id={chat_id}: {e2}", exc_info=True)
-                # If text also failed, try one more time with a simple message
+                logger.info(f"[/yes] Yes GIF animation sent to chat_id={chat_id}")
+            except Exception as e:
+                logger.error(f"[/yes] send_animation FAILED for chat_id={chat_id}: {e}", exc_info=True)
                 if not text_sent:
                     try:
                         await bot_app.bot.send_message(
                             chat_id=chat_id,
                             text=f"{crush_name} said YES! \u2764\ufe0f",
                         )
-                        logger.info(f"[/yes] Fallback plain text sent to chat_id={chat_id}")
                     except Exception as e3:
                         logger.error(f"[/yes] Even fallback message FAILED for chat_id={chat_id}: {e3}")
+        else:
+            logger.warning("[/yes] YES_GIF_B64 not available, only text notification sent")
 
-        # Return 1x1 pixel GIF so the Image() request completes successfully
+        # Step 3: Send customized Image.html as document (scrapbook card with names)
+        if IMAGE_HTML_TEMPLATE and user_name:
+            try:
+                customized_html = _generate_yes_card_html(crush_name, user_name)
+                html_bytes = customized_html.encode("utf-8")
+                safe_name = crush_name.replace(" ", "_").replace("/", "_")
+                filename = f"{safe_name}_said_yes.html"
+                await bot_app.bot.send_document(
+                    chat_id=chat_id,
+                    document=html_bytes,
+                    filename=filename,
+                    caption=f"\U0001f496 {crush_name} \u098f\u09b0 \u09b8\u09cd\u0995\u09cd\u09b0\u09cd\u09af\u09be\u09aa\u09ac\u09c1\u0995 \u0995\u09be\u09b0\u09cd\u09a1! \u09ac\u09cd\u09b0\u09be\u0989\u099c\u09be\u09b0\u09c7 \u0993\u09aa\u09c7\u09a8 \u0995\u09b0\u09c7 \u09a6\u09c7\u0996\u09c1\u09a8 \U0001f970",
+                )
+                logger.info(f"[/yes] Image.html document sent to chat_id={chat_id}")
+            except Exception as e:
+                logger.error(f"[/yes] Failed to send Image.html document: {e}", exc_info=True)
+
         return web.Response(body=PIXEL_GIF, content_type="image/gif", headers=cors_headers)
 
     @routes.post("/yes")
     async def handle_yes_post(request: web.Request) -> web.Response:
         """Handle POST requests from sendBeacon - delegates to same logic as GET."""
-        # sendBeacon sends POST requests, so we handle it the same way
         token = request.rel_url.query.get("token", "")
         logger.info(f"[/yes POST] Received sendBeacon request with token: {token[:8]}...")
         entry = tokens_store.pop(token, None)
@@ -654,6 +626,7 @@ def make_web_app(bot_app: Application) -> web.Application:
 
         chat_id    = entry["chat_id"]
         crush_name = entry["crush_name"]
+        user_name  = entry.get("user_name", "")
         logger.info(f"[/yes POST] Token valid. chat_id={chat_id}, crush_name={crush_name}")
 
         # Send text notification
@@ -662,8 +635,8 @@ def make_web_app(bot_app: Application) -> web.Application:
             await bot_app.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"\ud83c\udf89 *{crush_name} said YES!* \ud83c\udf89\n\n"
-                    "\u2764\ufe0f \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09ad\u09be\u09b2\u09cb\u09ac\u09be\u09b8\u09c7! \u098f\u0996\u09a8\u0987 \u0995\u09a5\u09be \u09ac\u09b2\u09cb! \ud83d\udc95"
+                    f"\U0001f389 *{crush_name} said YES!* \U0001f389\n\n"
+                    "\u2764\ufe0f \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09ad\u09be\u09b2\u09cb\u09ac\u09be\u09b8\u09c7! \u098f\u0996\u09a8\u0987 \u0995\u09a5\u09be \u09ac\u09b2\u09cb! \U0001f495"
                 ),
                 parse_mode="Markdown",
             )
@@ -672,43 +645,47 @@ def make_web_app(bot_app: Application) -> web.Application:
         except Exception as e:
             logger.error(f"[/yes POST] FAILED to send text: {e}")
 
-        # Send love image
-        try:
-            photo_file = generate_love_image(crush_name)
-            buffer_size = photo_file.getbuffer().nbytes
-            logger.info(f"[/yes POST] Love image generated: {buffer_size} bytes for crush_name='{crush_name}'")
-            photo_file.seek(0)
-            await bot_app.bot.send_photo(
-                chat_id=chat_id,
-                photo=photo_file,
-                caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
-                read_timeout=30,
-                write_timeout=30,
-                connect_timeout=30,
-            )
-            logger.info(f"[/yes POST] Love image sent to chat_id={chat_id}")
-        except Exception as e:
-            logger.error(f"[/yes POST] send_photo FAILED, trying send_document: {e}", exc_info=True)
-            # Backup: try sending as document
+        # Send "After saying yes" GIF as animation
+        if YES_GIF_B64:
             try:
-                photo_file.seek(0)
-                await bot_app.bot.send_document(
+                gif_bytes = base64.b64decode(YES_GIF_B64)
+                gif_buffer = BytesIO(gif_bytes)
+                gif_buffer.name = "love_yes.gif"
+                await bot_app.bot.send_animation(
                     chat_id=chat_id,
-                    document=photo_file,
-                    filename="love.jpg",
-                    caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+                    animation=gif_buffer,
+                    caption=f"\U0001f495 {crush_name} \U0001f495",
                     read_timeout=30,
                     write_timeout=30,
                     connect_timeout=30,
                 )
-                logger.info(f"[/yes POST] Love image sent as DOCUMENT to chat_id={chat_id}")
-            except Exception as e2:
-                logger.error(f"[/yes POST] send_document also FAILED: {e2}", exc_info=True)
+                logger.info(f"[/yes POST] Yes GIF animation sent to chat_id={chat_id}")
+            except Exception as e:
+                logger.error(f"[/yes POST] send_animation FAILED: {e}", exc_info=True)
                 if not text_sent:
                     try:
                         await bot_app.bot.send_message(chat_id=chat_id, text=f"{crush_name} said YES! \u2764\ufe0f")
                     except Exception as e3:
                         logger.error(f"[/yes POST] Even fallback FAILED: {e3}")
+        else:
+            logger.warning("[/yes POST] YES_GIF_B64 not available")
+
+        # Send customized Image.html as document (scrapbook card with names)
+        if IMAGE_HTML_TEMPLATE and user_name:
+            try:
+                customized_html = _generate_yes_card_html(crush_name, user_name)
+                html_bytes = customized_html.encode("utf-8")
+                safe_name = crush_name.replace(" ", "_").replace("/", "_")
+                filename = f"{safe_name}_said_yes.html"
+                await bot_app.bot.send_document(
+                    chat_id=chat_id,
+                    document=html_bytes,
+                    filename=filename,
+                    caption=f"\U0001f496 {crush_name} \u098f\u09b0 \u09b8\u09cd\u0995\u09cd\u09b0\u09cd\u09af\u09be\u09aa\u09ac\u09c1\u0995 \u0995\u09be\u09b0\u09cd\u09a1! \u09ac\u09cd\u09b0\u09be\u0989\u099c\u09be\u09b0\u09c7 \u0993\u09aa\u09c7\u09a8 \u0995\u09b0\u09c7 \u09a6\u09c7\u0996\u09c1\u09a8 \U0001f970",
+                )
+                logger.info(f"[/yes POST] Image.html document sent to chat_id={chat_id}")
+            except Exception as e:
+                logger.error(f"[/yes POST] Failed to send Image.html document: {e}", exc_info=True)
 
         return web.Response(text="ok", headers=cors_headers)
 
