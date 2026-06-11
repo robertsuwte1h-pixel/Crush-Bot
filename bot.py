@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import logging
 import os
 import uuid
+from io import BytesIO
 from aiohttp import web
 from telegram import Update
 from telegram.ext import (
@@ -42,6 +44,10 @@ tokens_store: dict = {}
 # Load GIF once at startup
 _gif_path = os.path.join(os.path.dirname(__file__), "bear_gif_b64.txt")
 GIF_B64 = open(_gif_path).read().strip()
+
+# Load love image (PNG) once at startup
+_love_img_path = os.path.join(os.path.dirname(__file__), "love_image_b64.txt")
+LOVE_IMAGE_B64 = open(_love_img_path).read().strip()
 
 WAITING_FOR_NAME = 1
 
@@ -294,6 +300,18 @@ def make_web_app(bot_app: Application) -> web.Application:
                 )
             except Exception as e:
                 logger.warning(f"Telegram notify failed: {e}")
+            # Send love image with crush name as caption
+            try:
+                image_data = base64.b64decode(LOVE_IMAGE_B64)
+                photo_file = BytesIO(image_data)
+                photo_file.name = "love.png"
+                await bot_app.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo_file,
+                    caption=f"💕 {crush_name} 💕",
+                )
+            except Exception as e:
+                logger.warning(f"Telegram photo send failed: {e}")
             return web.Response(text=success_page(crush_name), content_type="text/html")
 
         return web.Response(text=success_page("Someone special"), content_type="text/html")
