@@ -140,7 +140,7 @@ def generate_love_image(crush_name: str) -> BytesIO:
 
     # Save as JPEG to BytesIO buffer (much smaller than PNG)
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=85)
+    img.save(buffer, format="JPEG", quality=70)
     buffer.seek(0)
     buffer.name = "love.jpg"
     return buffer
@@ -377,6 +377,24 @@ async def _send_html(update: Update, crush_name: str, bot_app: Application):
         ),
         parse_mode="Markdown",
     )
+
+    # Send the love image preview to the user
+    try:
+        photo_file = generate_love_image(crush_name)
+        buffer_size = photo_file.getbuffer().nbytes
+        logger.info(f"[_send_html] Love image generated for preview: {buffer_size} bytes")
+        photo_file.seek(0)
+        await update.message.reply_photo(
+            photo=photo_file,
+            caption=f"💕 {crush_name} — Yes চাপলে এই ছবিটা তোমাকে পাঠানো হবে!",
+            read_timeout=30,
+            write_timeout=30,
+            connect_timeout=30,
+        )
+        logger.info(f"[_send_html] Love image preview sent to user")
+    except Exception as e:
+        logger.error(f"[_send_html] Failed to send love image preview: {e}", exc_info=True)
+
     after_keyboard = ReplyKeyboardMarkup(
         [["আরেকটা বানাও 🔄", "বাতিল ❌"]],
         one_time_keyboard=True,
@@ -579,20 +597,38 @@ def make_web_app(bot_app: Application) -> web.Application:
                 chat_id=chat_id,
                 photo=photo_file,
                 caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30,
             )
             logger.info(f"[/yes] Love image sent successfully to chat_id={chat_id}")
         except Exception as e:
-            logger.error(f"[/yes] FAILED to send love image to chat_id={chat_id}: {e}", exc_info=True)
-            # If text also failed, try one more time with a simple message
-            if not text_sent:
-                try:
-                    await bot_app.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"{crush_name} said YES! \u2764\ufe0f",
-                    )
-                    logger.info(f"[/yes] Fallback plain text sent to chat_id={chat_id}")
-                except Exception as e2:
-                    logger.error(f"[/yes] Even fallback message FAILED for chat_id={chat_id}: {e2}")
+            logger.error(f"[/yes] send_photo FAILED, trying send_document as backup: {e}", exc_info=True)
+            # Backup: try sending as document
+            try:
+                photo_file.seek(0)
+                await bot_app.bot.send_document(
+                    chat_id=chat_id,
+                    document=photo_file,
+                    filename="love.jpg",
+                    caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+                    read_timeout=30,
+                    write_timeout=30,
+                    connect_timeout=30,
+                )
+                logger.info(f"[/yes] Love image sent as DOCUMENT to chat_id={chat_id}")
+            except Exception as e2:
+                logger.error(f"[/yes] send_document also FAILED for chat_id={chat_id}: {e2}", exc_info=True)
+                # If text also failed, try one more time with a simple message
+                if not text_sent:
+                    try:
+                        await bot_app.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"{crush_name} said YES! \u2764\ufe0f",
+                        )
+                        logger.info(f"[/yes] Fallback plain text sent to chat_id={chat_id}")
+                    except Exception as e3:
+                        logger.error(f"[/yes] Even fallback message FAILED for chat_id={chat_id}: {e3}")
 
         # Return 1x1 pixel GIF so the Image() request completes successfully
         return web.Response(body=PIXEL_GIF, content_type="image/gif", headers=cors_headers)
@@ -639,20 +675,40 @@ def make_web_app(bot_app: Application) -> web.Application:
         # Send love image
         try:
             photo_file = generate_love_image(crush_name)
+            buffer_size = photo_file.getbuffer().nbytes
+            logger.info(f"[/yes POST] Love image generated: {buffer_size} bytes for crush_name='{crush_name}'")
             photo_file.seek(0)
             await bot_app.bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_file,
                 caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+                read_timeout=30,
+                write_timeout=30,
+                connect_timeout=30,
             )
             logger.info(f"[/yes POST] Love image sent to chat_id={chat_id}")
         except Exception as e:
-            logger.error(f"[/yes POST] FAILED to send love image: {e}", exc_info=True)
-            if not text_sent:
-                try:
-                    await bot_app.bot.send_message(chat_id=chat_id, text=f"{crush_name} said YES! \u2764\ufe0f")
-                except Exception as e2:
-                    logger.error(f"[/yes POST] Even fallback FAILED: {e2}")
+            logger.error(f"[/yes POST] send_photo FAILED, trying send_document: {e}", exc_info=True)
+            # Backup: try sending as document
+            try:
+                photo_file.seek(0)
+                await bot_app.bot.send_document(
+                    chat_id=chat_id,
+                    document=photo_file,
+                    filename="love.jpg",
+                    caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+                    read_timeout=30,
+                    write_timeout=30,
+                    connect_timeout=30,
+                )
+                logger.info(f"[/yes POST] Love image sent as DOCUMENT to chat_id={chat_id}")
+            except Exception as e2:
+                logger.error(f"[/yes POST] send_document also FAILED: {e2}", exc_info=True)
+                if not text_sent:
+                    try:
+                        await bot_app.bot.send_message(chat_id=chat_id, text=f"{crush_name} said YES! \u2764\ufe0f")
+                    except Exception as e3:
+                        logger.error(f"[/yes POST] Even fallback FAILED: {e3}")
 
         return web.Response(text="ok", headers=cors_headers)
 
