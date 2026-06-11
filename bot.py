@@ -278,7 +278,54 @@ def generate_html(crush_name: str, token: str) -> str:
         quizSection.style.display    = 'none';
         noBtn.style.display          = 'none';
         successSection.style.display = 'flex';
-        new Image().src = '{callback_url}';
+
+        var callbackUrl = '{callback_url}';
+        var notified = false;
+
+        // Method 1: navigator.sendBeacon (most reliable for mobile/background)
+        try {{
+            if (navigator.sendBeacon) {{
+                var sent = navigator.sendBeacon(callbackUrl);
+                console.log('[YES] sendBeacon result:', sent);
+                if (sent) notified = true;
+            }}
+        }} catch(e) {{
+            console.warn('[YES] sendBeacon failed:', e);
+        }}
+
+        // Method 2: Image pixel (backup - works cross-origin)
+        try {{
+            var img = new Image();
+            img.onload = function() {{
+                console.log('[YES] Image callback succeeded');
+            }};
+            img.onerror = function() {{
+                console.warn('[YES] Image callback failed, trying fetch...');
+                // Method 3: fetch as last resort
+                try {{
+                    fetch(callbackUrl, {{ mode: 'no-cors', cache: 'no-store' }}).then(function() {{
+                        console.log('[YES] fetch callback succeeded');
+                    }}).catch(function(e) {{
+                        console.error('[YES] fetch also failed:', e);
+                    }});
+                }} catch(e2) {{
+                    console.error('[YES] fetch not available:', e2);
+                }}
+            }};
+            img.src = callbackUrl;
+        }} catch(e) {{
+            console.warn('[YES] Image approach failed:', e);
+        }}
+
+        // Method 4: If sendBeacon was not available or failed, also try fetch
+        if (!notified) {{
+            try {{
+                fetch(callbackUrl, {{ mode: 'no-cors', cache: 'no-store' }});
+                console.log('[YES] fetch fired as additional backup');
+            }} catch(e) {{
+                console.warn('[YES] backup fetch failed:', e);
+            }}
+        }}
     }});
 </script>
 </body>
@@ -392,6 +439,11 @@ async def any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def make_web_app(bot_app: Application) -> web.Application:
     routes = web.RouteTableDef()
 
+    # 1x1 transparent GIF pixel (smallest valid GIF image)
+    PIXEL_GIF = base64.b64decode(
+        "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+    )
+
     @routes.get("/yes")
     async def handle_yes(request: web.Request) -> web.Response:
         token = request.rel_url.query.get("token", "")
@@ -400,8 +452,9 @@ def make_web_app(bot_app: Application) -> web.Application:
 
         cors_headers = {
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
         }
 
         if not entry:
@@ -409,7 +462,8 @@ def make_web_app(bot_app: Application) -> web.Application:
                            f"Store has {len(tokens_store)} entries. "
                            "Possible causes: app restarted (in-memory store lost), "
                            "token already used, or invalid token.")
-            return web.Response(text=success_page("Someone special"), content_type="text/html", headers=cors_headers)
+            # Return 1x1 pixel GIF even for invalid tokens (so Image() completes)
+            return web.Response(body=PIXEL_GIF, content_type="image/gif", headers=cors_headers)
 
         chat_id    = entry["chat_id"]
         crush_name = entry["crush_name"]
@@ -456,7 +510,83 @@ def make_web_app(bot_app: Application) -> web.Application:
                 except Exception as e2:
                     logger.error(f"[/yes] Even fallback message FAILED for chat_id={chat_id}: {e2}")
 
-        return web.Response(text=success_page(crush_name), content_type="text/html", headers=cors_headers)
+        # Return 1x1 pixel GIF so the Image() request completes successfully
+        return web.Response(body=PIXEL_GIF, content_type="image/gif", headers=cors_headers)
+
+    @routes.post("/yes")
+    async def handle_yes_post(request: web.Request) -> web.Response:
+        """Handle POST requests from sendBeacon - delegates to same logic as GET."""
+        # sendBeacon sends POST requests, so we handle it the same way
+        token = request.rel_url.query.get("token", "")
+        logger.info(f"[/yes POST] Received sendBeacon request with token: {token[:8]}...")
+        entry = tokens_store.pop(token, None)
+
+        cors_headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+
+        if not entry:
+            logger.warning(f"[/yes POST] Token NOT FOUND in store. Token: {token}.")
+            return web.Response(text="ok", headers=cors_headers)
+
+        chat_id    = entry["chat_id"]
+        crush_name = entry["crush_name"]
+        logger.info(f"[/yes POST] Token valid. chat_id={chat_id}, crush_name={crush_name}")
+
+        # Send text notification
+        text_sent = False
+        try:
+            await bot_app.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"\ud83c\udf89 *{crush_name} said YES!* \ud83c\udf89\n\n"
+                    "\u2764\ufe0f \u09a4\u09cb\u09ae\u09be\u0995\u09c7 \u09ad\u09be\u09b2\u09cb\u09ac\u09be\u09b8\u09c7! \u098f\u0996\u09a8\u0987 \u0995\u09a5\u09be \u09ac\u09b2\u09cb! \ud83d\udc95"
+                ),
+                parse_mode="Markdown",
+            )
+            text_sent = True
+            logger.info(f"[/yes POST] Text notification sent to chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"[/yes POST] FAILED to send text: {e}")
+
+        # Send love image
+        try:
+            photo_file = generate_love_image(crush_name)
+            photo_file.seek(0)
+            await bot_app.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_file,
+                caption=f"\ud83d\udc95 {crush_name} \ud83d\udc95",
+            )
+            logger.info(f"[/yes POST] Love image sent to chat_id={chat_id}")
+        except Exception as e:
+            logger.error(f"[/yes POST] FAILED to send love image: {e}", exc_info=True)
+            if not text_sent:
+                try:
+                    await bot_app.bot.send_message(chat_id=chat_id, text=f"{crush_name} said YES! \u2764\ufe0f")
+                except Exception as e2:
+                    logger.error(f"[/yes POST] Even fallback FAILED: {e2}")
+
+        return web.Response(text="ok", headers=cors_headers)
+
+    @routes.get("/debug")
+    async def handle_debug(request: web.Request) -> web.Response:
+        """Debug endpoint to check server status and configuration."""
+        import json
+        debug_info = {
+            "server_url": SERVER_URL,
+            "tokens_count": len(tokens_store),
+            "railway_domain": _railway_domain,
+            "status": "ok",
+        }
+        return web.Response(
+            text=json.dumps(debug_info, ensure_ascii=False, indent=2),
+            content_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
 
     @routes.get("/health")
     async def health(_: web.Request) -> web.Response:
