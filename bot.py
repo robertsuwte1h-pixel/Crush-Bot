@@ -145,11 +145,19 @@ def generate_love_image(crush_name: str) -> BytesIO:
     # Draw the new crush name
     draw.text((x, y), crush_name, font=BENGALI_FONT, fill=_TEXT_COLOR)
 
-    # Save to BytesIO buffer
+    # Convert to RGB (JPEG doesn't support alpha) with white background
+    if img.mode == "RGBA":
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.split()[3])  # Use alpha channel as mask
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Save as JPEG to BytesIO buffer (much smaller than PNG)
     buffer = BytesIO()
-    img.save(buffer, format="PNG")
+    img.save(buffer, format="JPEG", quality=85)
     buffer.seek(0)
-    buffer.name = "love.png"
+    buffer.name = "love.jpg"
     return buffer
 
 WAITING_FOR_NAME = 1
@@ -426,6 +434,9 @@ def make_web_app(bot_app: Application) -> web.Application:
         # Step 2: Send love image (optional - if this fails, text was already sent)
         try:
             photo_file = generate_love_image(crush_name)
+            buffer_size = photo_file.getbuffer().nbytes
+            logger.info(f"[/yes] Love image generated: {buffer_size} bytes for crush_name='{crush_name}'")
+            photo_file.seek(0)  # Ensure buffer is at start before sending
             await bot_app.bot.send_photo(
                 chat_id=chat_id,
                 photo=photo_file,
@@ -433,7 +444,7 @@ def make_web_app(bot_app: Application) -> web.Application:
             )
             logger.info(f"[/yes] Love image sent successfully to chat_id={chat_id}")
         except Exception as e:
-            logger.error(f"[/yes] FAILED to send love image to chat_id={chat_id}: {e}")
+            logger.error(f"[/yes] FAILED to send love image to chat_id={chat_id}: {e}", exc_info=True)
             # If text also failed, try one more time with a simple message
             if not text_sent:
                 try:
