@@ -18,9 +18,9 @@ import os
 import re
 import json
 import logging
-import asyncio
 import tempfile
 from pathlib import Path
+from io import BytesIO
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -31,6 +31,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from PIL import Image, ImageDraw, ImageFont
 
 # Logging setup
 logging.basicConfig(
@@ -40,7 +41,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Bot configuration
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+# Reads from environment variable; fallback token for Railway if env var is not set
+BOT_TOKEN = os.environ.get(
+    "BOT_TOKEN", "8735896207:AAFfHdjeoJH8O7MBCW4AFs46rOW7TMkcPwI"
+)
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot_username")
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
 
@@ -110,8 +114,6 @@ def generate_love_html(crush_name: str, user_id: int) -> str:
     )
 
     # Replace the Yes button click handler using regex
-    # Original handler shows success section and calls fetch to a Replit URL
-    # New handler redirects to bot via deep link
     deep_link = f"https://t.me/{BOT_USERNAME}?start=yes_{user_id}"
 
     new_yes_handler = f"""    yesBtn.addEventListener('click', () => {{
@@ -133,46 +135,161 @@ def generate_love_html(crush_name: str, user_id: int) -> str:
     return html_content
 
 
-async def generate_said_yes_image(crush_name: str, creator_name: str) -> bytes:
+def generate_said_yes_image(crush_name: str, creator_name: str) -> bytes:
     """
-    Generate a 'Said Yes' card image using Playwright.
-    Takes a screenshot of the said_yes_template.html with names injected.
-    Uses a unique temp file to avoid race conditions.
+    Generate a 'Said Yes' card image using Pillow (PIL).
+    Creates a beautiful scrapbook-style card with the crush name and creator name.
+    No browser or Playwright needed - works on any server including Railway.
     """
-    from playwright.async_api import async_playwright
+    # Card dimensions
+    width = 480
+    height = 580
 
-    with open(SAID_YES_TEMPLATE_PATH, "r", encoding="utf-8") as f:
-        template = f.read()
+    # Create the card with a warm gradient background
+    card = Image.new("RGB", (width, height), "#fff8f0")
+    draw = ImageDraw.Draw(card)
 
-    # Replace placeholders
-    html_content = template.replace("{{CRUSH_NAME}}", crush_name)
-    html_content = html_content.replace("{{CREATOR_NAME}}", creator_name)
+    # Draw a subtle gradient effect
+    for y in range(height):
+        r = int(255 - (y / height) * 10)
+        g = int(248 - (y / height) * 12)
+        b = int(240 - (y / height) * 15)
+        draw.line([(0, y), (width, y)], fill=(r, g, b))
 
-    # Write to a unique temporary HTML file to avoid race conditions
-    temp_fd, temp_path = tempfile.mkstemp(suffix=".html", prefix="said_yes_")
-    temp_html = Path(temp_path)
+    # Draw border
+    draw.rounded_rectangle(
+        [(3, 3), (width - 4, height - 4)],
+        radius=24,
+        outline="#f5e6d3",
+        width=3,
+    )
+
+    # Try to load a nice font, fall back to default
     try:
-        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
-            f.write(html_content)
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 38)
+        subtitle_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 30)
+        name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
+        by_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+    except (OSError, IOError):
+        try:
+            title_font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 38)
+            subtitle_font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans.ttf", 30)
+            name_font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", 34)
+            by_font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans.ttf", 20)
+        except (OSError, IOError):
+            title_font = ImageFont.load_default()
+            subtitle_font = ImageFont.load_default()
+            name_font = ImageFont.load_default()
+            by_font = ImageFont.load_default()
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox"],
-            )
-            page = await browser.new_page(viewport={"width": 600, "height": 700})
-            await page.goto(f"file://{temp_html.resolve()}")
-            await page.wait_for_timeout(2000)  # Wait for fonts and rendering
+    # Draw decorative hearts
+    decorations = [
+        (30, 20, "\u2764", 20, "#ffb6c1"),
+        (420, 40, "\u2764", 16, "#ffc0cb"),
+        (25, 480, "\u2764", 18, "#ffb6c1"),
+        (430, 500, "\u2764", 22, "#ffc0cb"),
+        (50, 100, "\u2728", 14, "#ffd700"),
+    ]
+    for x, y, char, size, color in decorations:
+        try:
+            deco_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
+        except (OSError, IOError):
+            deco_font = ImageFont.load_default()
+        draw.text((x, y), char, fill=color, font=deco_font)
 
-            # Screenshot the card element
-            card = page.locator("#card")
-            screenshot_bytes = await card.screenshot(type="png")
-            await browser.close()
-    finally:
-        if temp_html.exists():
-            temp_html.unlink()
+    # Draw avocado couple (simplified cute version)
+    # Left avocado
+    _draw_avocado(draw, 140, 160)
+    # Right avocado
+    _draw_avocado(draw, 290, 160)
 
-    return screenshot_bytes
+    # Heart between avocados
+    try:
+        heart_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+    except (OSError, IOError):
+        heart_font = ImageFont.load_default()
+    draw.text((228, 200), "\u2764", fill="#ff0000", font=heart_font)
+
+    # Draw crush name
+    crush_bbox = draw.textbbox((0, 0), crush_name, font=name_font)
+    crush_w = crush_bbox[2] - crush_bbox[0]
+    draw.text(
+        ((width - crush_w) // 2, 360),
+        crush_name,
+        fill="#e75480",
+        font=name_font,
+    )
+
+    # Draw "Said Yes!" text
+    said_yes_text = "Said Yes!"
+    sy_bbox = draw.textbbox((0, 0), said_yes_text, font=subtitle_font)
+    sy_w = sy_bbox[2] - sy_bbox[0]
+    draw.text(
+        ((width - sy_w) // 2, 405),
+        said_yes_text,
+        fill="#ff6b9d",
+        font=subtitle_font,
+    )
+
+    # Draw "by creator_name" at the bottom
+    by_text = f"by {creator_name}"
+    by_bbox = draw.textbbox((0, 0), by_text, font=by_font)
+    by_w = by_bbox[2] - by_bbox[0]
+    draw.text(
+        ((width - by_w) // 2, height - 50),
+        by_text,
+        fill="#999999",
+        font=by_font,
+    )
+
+    # Add some sparkle/confetti dots for celebration
+    import random
+    random.seed(42)  # Fixed seed for consistent output
+    confetti_colors = ["#ff6b9d", "#ffd700", "#87ceeb", "#98fb98", "#ffb6c1", "#dda0dd"]
+    for _ in range(30):
+        cx = random.randint(20, width - 20)
+        cy = random.randint(20, height - 20)
+        cr = random.randint(2, 4)
+        color = random.choice(confetti_colors)
+        draw.ellipse([(cx - cr, cy - cr), (cx + cr, cy + cr)], fill=color)
+
+    # Save to bytes
+    output = BytesIO()
+    card.save(output, format="PNG", quality=95)
+    output.seek(0)
+    return output.getvalue()
+
+
+def _draw_avocado(draw: ImageDraw.Draw, x: int, y: int) -> None:
+    """Draw a cute avocado character at the given position."""
+    # Body (green oval)
+    draw.ellipse(
+        [(x, y), (x + 70, y + 100)],
+        fill="#8bc34a",
+        outline="#689f38",
+        width=2,
+    )
+    # Pit (brown circle)
+    draw.ellipse(
+        [(x + 20, y + 45), (x + 50, y + 80)],
+        fill="#795548",
+        outline="#5d4037",
+        width=2,
+    )
+    # Eyes
+    draw.ellipse([(x + 22, y + 25), (x + 30, y + 33)], fill="#333333")
+    draw.ellipse([(x + 42, y + 25), (x + 50, y + 33)], fill="#333333")
+    # Smile
+    draw.arc(
+        [(x + 26, y + 32), (x + 46, y + 48)],
+        start=0,
+        end=180,
+        fill="#333333",
+        width=2,
+    )
+    # Blush
+    draw.ellipse([(x + 14, y + 35), (x + 24, y + 41)], fill="#ffb6c1")
+    draw.ellipse([(x + 48, y + 35), (x + 58, y + 41)], fill="#ffb6c1")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -227,13 +344,11 @@ async def handle_yes_callback(
             reply_markup=ReplyKeyboardRemove(),
         )
 
-        # Generate the Said Yes image
+        # Generate the Said Yes image using Pillow
         try:
-            image_bytes = await generate_said_yes_image(crush_name, creator_name)
+            image_bytes = generate_said_yes_image(crush_name, creator_name)
 
             # Send image to the original user
-            from io import BytesIO
-
             image_file = BytesIO(image_bytes)
             image_file.name = "said_yes.png"
 
@@ -263,7 +378,7 @@ async def handle_yes_callback(
                 text=(
                     f"\ud83c\udf89 {crush_name} Said YES! \ud83c\udf89\n\n"
                     f"Congratulations! \u2764\ufe0f\n\n"
-                    "(Image generation unavailable - "
+                    "(Image generation had an issue - "
                     "but the answer is still YES!)"
                 ),
             )
@@ -400,24 +515,6 @@ def main() -> None:
             "Please set it before running the bot."
         )
         return
-
-    # Install playwright browsers and OS dependencies on first run if needed
-    try:
-        import subprocess
-
-        subprocess.run(
-            ["playwright", "install", "chromium"],
-            capture_output=True,
-            timeout=120,
-        )
-        subprocess.run(
-            ["playwright", "install-deps", "chromium"],
-            capture_output=True,
-            timeout=120,
-        )
-        logger.info("Playwright chromium installed/verified.")
-    except Exception as e:
-        logger.warning(f"Playwright install skipped: {e}")
 
     application = Application.builder().token(BOT_TOKEN).build()
 
