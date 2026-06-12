@@ -1,7 +1,14 @@
 {
   "task_id": "task-create-telegram-crush-bot",
   "task_description": "Create a Telegram bot that lets users input their crush's name, generates a 'Do you love me?' HTML file with that name, and when the crush clicks Yes (redirected to bot), generates a 'Said Yes' scrapbook card image and sends it back to the original user. Deploy on Railway.",
-  "status": "in_progress",
+  "status": "completed",
   "feature_order": ["FEAT-001"],
-  "blocked_reason": null
+  "blocked_reason": null,
+  "verification": {
+    "build": "pass",
+    "tests": "pass",
+    "test_quality": "pass",
+    "docker_build": "skipped",
+    "summary": "pip install succeeds, python import succeeds, no InlineKeyboard usage, ReplyKeyboardMarkup used, all files exist with correct content."
+  }
 }

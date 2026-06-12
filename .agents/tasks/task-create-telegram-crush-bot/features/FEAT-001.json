@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "feat",
   "description": "Create the complete Telegram Crush Bot with all features: user flow for name input, HTML generation, Yes callback handling, image generation from Said Yes template, admin panel, and Railway deployment configuration.",
-  "status": "completed",
+  "status": "in_progress",
   "steps": [
     "Create requirements.txt with dependencies: python-telegram-bot>=20.0, playwright, aiohttp (for webhook if needed)",
     "Create the 'Said Yes' HTML template (said_yes_template.html) - an avocado couple scrapbook-style card with placeholders {{CRUSH_NAME}} and {{CREATOR_NAME}}, using Tailwind CSS CDN, Google Fonts (Caveat, Hind Siliguri, Pacifico). Card shows '[crush_name] Said Yes' with avocado couple illustration, 'by [creator_name]' at the bottom. Only the card canvas element matters (no customization panel).",

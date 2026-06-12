@@ -11,12 +11,15 @@ Flow:
 Environment Variables:
     BOT_TOKEN: Telegram Bot Token from @BotFather
     BOT_USERNAME: Bot username (without @) for deep link generation
+    ADMIN_USER_ID: Telegram user ID allowed to use /admin (optional, if unset admin is open)
 """
 
 import os
+import re
 import json
 import logging
 import asyncio
+import tempfile
 from pathlib import Path
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -39,6 +42,7 @@ logger = logging.getLogger(__name__)
 # Bot configuration
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot_username")
+ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
 
 # Conversation states
 ASKING_NAME = 0
@@ -63,9 +67,18 @@ def load_user_data() -> dict:
 
 
 def save_user_data(data: dict) -> None:
-    """Save user data to JSON file."""
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """Save user data to JSON file atomically using temp-file-then-rename."""
+    temp_fd, temp_path = tempfile.mkstemp(
+        suffix=".json", prefix="user_data_", dir=Path(DATA_FILE).parent or "."
+    )
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, DATA_FILE)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        raise
 
 
 def get_user_data() -> dict:
@@ -96,20 +109,10 @@ def generate_love_html(crush_name: str, user_id: int) -> str:
         f"{heart_emoji} {crush_name} {heart_emoji}",
     )
 
-    # Replace the Yes button click handler
-    # Original handler shows success section and calls fetch
+    # Replace the Yes button click handler using regex
+    # Original handler shows success section and calls fetch to a Replit URL
     # New handler redirects to bot via deep link
     deep_link = f"https://t.me/{BOT_USERNAME}?start=yes_{user_id}"
-
-    old_yes_handler = """    yesBtn.addEventListener('click', () => {
-        quizSection.style.display = 'none';
-        noBtn.style.display = 'none';
-        successSection.style.display = 'flex';
-        // Notify the sender
-        if ('https://51a6c7ef-5ced-4a01-a234-e3347fa8df1a-00-2tyvxzlsx4oy1.pike.replit.dev/api/yes?token=e8935d3b-f44e-4a0f-8ead-347d2b7b4c92') {
-            fetch('https://51a6c7ef-5ced-4a01-a234-e3347fa8df1a-00-2tyvxzlsx4oy1.pike.replit.dev/api/yes?token=e8935d3b-f44e-4a0f-8ead-347d2b7b4c92').catch(() => {});
-        }
-    });"""
 
     new_yes_handler = f"""    yesBtn.addEventListener('click', () => {{
         quizSection.style.display = 'none';
@@ -119,7 +122,13 @@ def generate_love_html(crush_name: str, user_id: int) -> str:
         window.location.href = '{deep_link}';
     }});"""
 
-    html_content = html_content.replace(old_yes_handler, new_yes_handler)
+    # Use regex to match the yesBtn click handler regardless of whitespace/URL changes
+    html_content = re.sub(
+        r"yesBtn\.addEventListener\('click',\s*\(\)\s*=>\s*\{.*?\}\);",
+        new_yes_handler.strip(),
+        html_content,
+        flags=re.DOTALL,
+    )
 
     return html_content
 
@@ -128,6 +137,7 @@ async def generate_said_yes_image(crush_name: str, creator_name: str) -> bytes:
     """
     Generate a 'Said Yes' card image using Playwright.
     Takes a screenshot of the said_yes_template.html with names injected.
+    Uses a unique temp file to avoid race conditions.
     """
     from playwright.async_api import async_playwright
 
@@ -138,13 +148,13 @@ async def generate_said_yes_image(crush_name: str, creator_name: str) -> bytes:
     html_content = template.replace("{{CRUSH_NAME}}", crush_name)
     html_content = html_content.replace("{{CREATOR_NAME}}", creator_name)
 
-    # Write temporary HTML file
-    temp_html = Path(__file__).parent / "temp_said_yes.html"
-    with open(temp_html, "w", encoding="utf-8") as f:
-        f.write(html_content)
-
-    screenshot_bytes = None
+    # Write to a unique temporary HTML file to avoid race conditions
+    temp_fd, temp_path = tempfile.mkstemp(suffix=".html", prefix="said_yes_")
+    temp_html = Path(temp_path)
     try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
@@ -304,16 +314,17 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
 
-        await update.message.reply_document(
-            document=open(output_path, "rb"),
-            filename=f"Do_you_love_me_{crush_name}.html",
-            caption=(
-                f"\ud83d\udc8c Here's your card for {crush_name}!\n\n"
-                f"Send this file to your crush. When they open it "
-                f"and click 'Yes', I'll send you a special card!\n\n"
-                f"\u26a0\ufe0f Make sure they open it in a browser!"
-            ),
-        )
+        with open(output_path, "rb") as doc_file:
+            await update.message.reply_document(
+                document=doc_file,
+                filename=f"Do_you_love_me_{crush_name}.html",
+                caption=(
+                    f"\ud83d\udc8c Here's your card for {crush_name}!\n\n"
+                    f"Send this file to your crush. When they open it "
+                    f"and click 'Yes', I'll send you a special card!\n\n"
+                    f"\u26a0\ufe0f Make sure they open it in a browser!"
+                ),
+            )
 
         # Clean up temp file
         if output_path.exists():
@@ -339,7 +350,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Compact admin panel showing basic stats."""
+    """Compact admin panel showing basic stats. Restricted to ADMIN_USER_ID."""
+    # Authorization check
+    if ADMIN_USER_ID:
+        if str(update.message.from_user.id) != ADMIN_USER_ID:
+            await update.message.reply_text(
+                "You are not authorized to use this command.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
+
     user_data = get_user_data()
     total_users = len(user_data)
     waiting = sum(1 for v in user_data.values() if v.get("status") == "waiting")
@@ -381,12 +401,17 @@ def main() -> None:
         )
         return
 
-    # Install playwright browsers on first run if needed
+    # Install playwright browsers and OS dependencies on first run if needed
     try:
         import subprocess
 
         subprocess.run(
             ["playwright", "install", "chromium"],
+            capture_output=True,
+            timeout=120,
+        )
+        subprocess.run(
+            ["playwright", "install-deps", "chromium"],
             capture_output=True,
             timeout=120,
         )
