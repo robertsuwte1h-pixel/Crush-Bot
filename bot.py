@@ -19,6 +19,8 @@ import re
 import json
 import logging
 import tempfile
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from io import BytesIO
 
@@ -45,7 +47,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.environ.get(
     "BOT_TOKEN", "8735896207:AAFfHdjeoJH8O7MBCW4AFs46rOW7TMkcPwI"
 )
-BOT_USERNAME = os.environ.get("BOT_USERNAME", "your_bot_username")
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "CrushLoveBot")
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
 
 # Conversation states
@@ -507,6 +509,33 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Simple HTTP handler that returns OK for health checks."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        """Suppress default HTTP log messages to keep logs clean."""
+        pass
+
+
+def start_health_server() -> None:
+    """Start a lightweight HTTP health check server in a background thread.
+
+    Railway expects a process to listen on the PORT environment variable.
+    Without this, Railway may kill the process thinking it is dead.
+    """
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"Health check server started on port {port}")
+
+
 def main() -> None:
     """Start the bot."""
     if not BOT_TOKEN:
@@ -515,6 +544,13 @@ def main() -> None:
             "Please set it before running the bot."
         )
         return
+
+    # Start health check server for Railway
+    start_health_server()
+
+    logger.info("Crush Bot is starting up...")
+    logger.info(f"Bot username: @{BOT_USERNAME}")
+    logger.info(f"Polling mode active")
 
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -533,7 +569,7 @@ def main() -> None:
     application.add_handler(CommandHandler("admin", admin))
     application.add_handler(CommandHandler("help", help_command))
 
-    logger.info("Bot starting...")
+    logger.info("Bot started successfully! Listening for updates...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
