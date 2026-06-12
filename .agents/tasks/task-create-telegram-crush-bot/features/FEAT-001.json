@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Create the complete Telegram Crush Bot with all features: user flow for name input, HTML generation, Yes callback handling, image generation from Said Yes template, admin panel, and Railway deployment configuration.",
+  "status": "in_progress",
+  "steps": [
+    "Create requirements.txt with dependencies: python-telegram-bot>=20.0, playwright, aiohttp (for webhook if needed)",
+    "Create the 'Said Yes' HTML template (said_yes_template.html) - an avocado couple scrapbook-style card with placeholders {{CRUSH_NAME}} and {{CREATOR_NAME}}, using Tailwind CSS CDN, Google Fonts (Caveat, Hind Siliguri, Pacifico). Card shows '[crush_name] Said Yes' with avocado couple illustration, 'by [creator_name]' at the bottom. Only the card canvas element matters (no customization panel).",
+    "Create bot.py with the following functionality: (a) ConversationHandler for user flow - user sends /start, bot asks for crush/gf/bf name using Reply Keyboard, user provides name, bot generates the 'Do you love me?' HTML file with the crush name replacing 'Nai' in the .name-tag and Yes button linking to t.me/BOT_USERNAME?start=yes_USERID, bot sends the HTML file to user. (b) Deep link handling - when crush clicks Yes and opens bot via t.me/BotName?start=yes_USERID, bot identifies original user, generates 'Said Yes' image using Playwright screenshot of the said_yes_template.html with crush name and user name injected, sends image to original user. (c) User state storage using simple dict/file. (d) ALL buttons must use ReplyKeyboardMarkup (no InlineKeyboard). (e) Compact admin panel with /admin command showing stats.",
+    "Create Procfile for Railway deployment: 'worker: python bot.py'",
+    "Create a playwright_setup.sh script or add playwright install to the bot startup for Railway",
+    "Ensure bot.py reads BOT_TOKEN from environment variable, and includes a note about setting BOT_USERNAME for deep links"
+  ],
+  "acceptance_criteria": [
+    "requirements.txt exists with python-telegram-bot and playwright listed",
+    "bot.py imports successfully without syntax errors",
+    "bot.py implements ConversationHandler with states for getting crush name",
+    "bot.py handles /start with yes_ prefix for deep link callback",
+    "bot.py uses only ReplyKeyboardMarkup (no InlineKeyboardMarkup or InlineKeyboardButton)",
+    "said_yes_template.html exists with {{CRUSH_NAME}} and {{CREATOR_NAME}} placeholders",
+    "The HTML generation replaces 'Nai' with the crush name and updates Yes button href",
+    "Procfile exists for Railway deployment",
+    "Admin panel exists at /admin command and is compact"
+  ],
+  "verification": [
+    "Run: pip install -r requirements.txt",
+    "Run: python -c \"import bot; print('Import successful')\"",
+    "Run: grep -c 'InlineKeyboard' bot.py (should be 0)",
+    "Run: grep 'ReplyKeyboardMarkup' bot.py (should find matches)",
+    "Verify said_yes_template.html contains {{CRUSH_NAME}} and {{CREATOR_NAME}}",
+    "Verify Procfile exists"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

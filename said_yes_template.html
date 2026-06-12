@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Said Yes!</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Hind+Siliguri:wght@400;700&family=Pacifico&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #fef9f0;
+            font-family: 'Hind Siliguri', sans-serif;
+        }
+        .card-canvas {
+            width: 480px;
+            height: 580px;
+            background: linear-gradient(135deg, #fff8f0 0%, #fff0e6 100%);
+            border-radius: 24px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            border: 3px solid #f5e6d3;
+            overflow: hidden;
+        }
+        .card-canvas::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23f5e6d3' fill-opacity='0.3'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        .title-text {
+            font-family: 'Pacifico', cursive;
+            font-size: 2.5rem;
+            color: #e75480;
+            text-align: center;
+            margin-bottom: 8px;
+            position: relative;
+            z-index: 1;
+        }
+        .subtitle-text {
+            font-family: 'Caveat', cursive;
+            font-size: 1.8rem;
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            position: relative;
+            z-index: 1;
+        }
+        .avocado-couple {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+        .avocado {
+            width: 100px;
+            height: 130px;
+            position: relative;
+        }
+        .avocado-body {
+            width: 80px;
+            height: 110px;
+            background: #8bc34a;
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+            position: absolute;
+            bottom: 0;
+            left: 10px;
+            border: 3px solid #689f38;
+        }
+        .avocado-pit {
+            width: 35px;
+            height: 40px;
+            background: #795548;
+            border-radius: 50%;
+            position: absolute;
+            bottom: 20px;
+            left: 32px;
+            border: 2px solid #5d4037;
+        }
+        .avocado-face {
+            position: absolute;
+            top: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
+        .avocado-eyes {
+            font-size: 14px;
+            letter-spacing: 8px;
+            margin-bottom: 4px;
+        }
+        .avocado-smile {
+            font-size: 16px;
+        }
+        .avocado-blush {
+            position: absolute;
+            width: 12px;
+            height: 8px;
+            background: rgba(255, 150, 150, 0.6);
+            border-radius: 50%;
+            top: 38px;
+        }
+        .blush-left { left: 22px; }
+        .blush-right { right: 22px; }
+        .heart-between {
+            position: absolute;
+            top: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 24px;
+            animation: float 2s ease-in-out infinite;
+        }
+        @keyframes float {
+            0%, 100% { transform: translateX(-50%) translateY(0); }
+            50% { transform: translateX(-50%) translateY(-8px); }
+        }
+        .crush-name {
+            font-family: 'Caveat', cursive;
+            font-size: 2.2rem;
+            color: #e75480;
+            font-weight: 700;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+        }
+        .said-yes {
+            font-family: 'Pacifico', cursive;
+            font-size: 2rem;
+            color: #ff6b9d;
+            text-align: center;
+            position: relative;
+            z-index: 1;
+            margin-top: 4px;
+        }
+        .by-line {
+            font-family: 'Caveat', cursive;
+            font-size: 1.3rem;
+            color: #999;
+            text-align: center;
+            position: absolute;
+            bottom: 25px;
+            z-index: 1;
+        }
+        .decorative-hearts {
+            position: absolute;
+            z-index: 0;
+        }
+        .deco-heart-1 { top: 20px; left: 30px; font-size: 20px; opacity: 0.4; }
+        .deco-heart-2 { top: 40px; right: 40px; font-size: 16px; opacity: 0.3; }
+        .deco-heart-3 { bottom: 60px; left: 25px; font-size: 18px; opacity: 0.35; }
+        .deco-heart-4 { bottom: 50px; right: 35px; font-size: 22px; opacity: 0.3; }
+        .deco-heart-5 { top: 100px; left: 50px; font-size: 14px; opacity: 0.25; }
+    </style>
+</head>
+<body>
+    <div class="card-canvas" id="card">
+        <span class="decorative-hearts deco-heart-1">💕</span>
+        <span class="decorative-hearts deco-heart-2">💗</span>
+        <span class="decorative-hearts deco-heart-3">💖</span>
+        <span class="decorative-hearts deco-heart-4">💕</span>
+        <span class="decorative-hearts deco-heart-5">✨</span>
+
+        <div class="avocado-couple">
+            <div class="avocado">
+                <div class="avocado-body">
+                    <div class="avocado-pit"></div>
+                    <div class="avocado-face">
+                        <div class="avocado-eyes">● ●</div>
+                        <div class="avocado-smile">◡</div>
+                    </div>
+                    <div class="avocado-blush blush-left"></div>
+                    <div class="avocado-blush blush-right"></div>
+                </div>
+            </div>
+            <div style="position: relative; width: 30px;">
+                <span class="heart-between">❤️</span>
+            </div>
+            <div class="avocado">
+                <div class="avocado-body">
+                    <div class="avocado-pit"></div>
+                    <div class="avocado-face">
+                        <div class="avocado-eyes">● ●</div>
+                        <div class="avocado-smile">◡</div>
+                    </div>
+                    <div class="avocado-blush blush-left"></div>
+                    <div class="avocado-blush blush-right"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="crush-name">{{CRUSH_NAME}}</div>
+        <div class="said-yes">Said Yes!</div>
+
+        <div class="by-line">by {{CREATOR_NAME}}</div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "project_type": "Python Telegram Bot for Railway deployment",
+  "language": "Python 3.11",
+  "build_system": "pip with requirements.txt, Railway deployment via Procfile",
+  "test_framework": "Manual testing / smoke test via python import",
+  "build_command": "pip install -r requirements.txt",
+  "test_command": "python -c \"import bot\"",
+  "verification_instructions": "1. Install dependencies with pip install -r requirements.txt. 2. Verify python can import the bot module without errors. 3. Verify all required files exist (bot.py, requirements.txt, Procfile, said_yes_template.html).",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "pip install -r requirements.txt",
+  "environment_constraints": "OPEN_INTERNET - full network access. Python 3.11 available. No Telegram token available for live testing - validation is structural/import-based.",
+  "contribution_requirements": "No formal contribution guidelines. Repo has a single HTML file. Bot is greenfield development.",
+  "key_patterns": "Existing HTML file uses base64-encoded GIFs, has a 'Nai' placeholder in .name-tag element, Yes button triggers fetch to a callback URL, No button dodges on hover/touch/click.",
+  "relevant_files": [
+    "do_you_love_me_Crush name.html",
+    "bot.py (to create)",
+    "requirements.txt (to create)",
+    "Procfile (to create)",
+    "said_yes_template.html (to create)"
+  ],
+  "directory_structure": "Root contains only 'do_you_love_me_Crush name.html' - a love confession card with bear GIFs, dodging No button, and success animation. The bot will be built around this template."
+}
