@@ -1,3 +1,0 @@
-python-telegram-bot==21.9
-aiohttp==3.11.11
-Pillow==11.3.0
