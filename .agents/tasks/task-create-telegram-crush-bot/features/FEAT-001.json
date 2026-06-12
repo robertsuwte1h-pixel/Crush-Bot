@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "feat",
   "description": "Create the complete Telegram Crush Bot with all features: user flow for name input, HTML generation, Yes callback handling, image generation from Said Yes template, admin panel, and Railway deployment configuration.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create requirements.txt with dependencies: python-telegram-bot>=20.0, playwright, aiohttp (for webhook if needed)",
     "Create the 'Said Yes' HTML template (said_yes_template.html) - an avocado couple scrapbook-style card with placeholders {{CRUSH_NAME}} and {{CREATOR_NAME}}, using Tailwind CSS CDN, Google Fonts (Caveat, Hind Siliguri, Pacifico). Card shows '[crush_name] Said Yes' with avocado couple illustration, 'by [creator_name]' at the bottom. Only the card canvas element matters (no customization panel).",
@@ -31,5 +31,5 @@
     "Verify Procfile exists"
   ],
   "blocked_reason": null,
-  "findings": "Emoji encoding: the HTML template uses actual Unicode U+1F495 characters (not surrogate pairs). Python string replacement works correctly with the actual Unicode form. pyenv environment has python3 available but not python - Procfile uses 'python' which Railway handles correctly. User provided a bot token during implementation (8735896207:AAF...) but it is stored as env var BOT_TOKEN for security, not hardcoded."
+  "findings": "Emoji encoding: the HTML template uses actual Unicode U+1F495 characters (not surrogate pairs). Python string replacement works correctly with the actual Unicode form. pyenv environment has python3 available but not python - Procfile uses 'python' which Railway handles correctly. User provided a bot token during implementation (8735896207:AAF...) but it is stored as env var BOT_TOKEN for security, not hardcoded. Review fixes applied: regex-based HTML replacement, ADMIN_USER_ID auth, with-statement for file handles, tempfile.mkstemp for race-free temp files, atomic JSON persistence via os.replace, and install-deps added to startup."
 }
